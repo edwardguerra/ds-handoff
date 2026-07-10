@@ -55,3 +55,4 @@ The old folders were left in place; this repo supersedes all of them.
 ## Notes
 
 - `documentAccess: "dynamic-page"` is intentionally **omitted**: the Variables module still uses sync APIs (`getLocalVariableCollections`, `getVariableById`, `getLocalGridStyles`) that throw under dynamic-page. Migrating those to the async equivalents would allow re-enabling it (needed if this is ever published to Community).
+- **Don't change `manifest.json`'s `id`.** `setPluginData`/`getPluginData` (used by both Resync features) are namespaced per plugin id — changing it orphans every sourceNodeId/specModules/dsTokensDoc stamp already on canvas, silently breaking resync for existing sheets.

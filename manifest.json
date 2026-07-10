@@ -1,14 +1,11 @@
 {
   "name": "DS Handoff",
+  "id": "17836902793958968",
   "api": "1.0.0",
   "main": "code.js",
   "ui": "ui.html",
   "editorType": ["figma"],
   "permissions": ["currentuser"],
-  "menu": [
-    { "name": "Component Spec", "command": "spec" },
-    { "name": "Variables", "command": "variables" }
-  ],
   "relaunchButtons": [
     {
       "command": "rewrite",

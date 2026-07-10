@@ -3354,12 +3354,15 @@
   var TOKENS_DOC_KEY = "dsTokensDoc";
   var TOKENS_CONFIG_KEY = "dsTokensConfig";
   function findTokensDocFrame() {
-    var children = figma.currentPage.children || [];
-    for (var i = 0; i < children.length; i++) {
-      var child = children[i];
-      if (child.type === "FRAME" && child.getPluginData(TOKENS_DOC_KEY) === "1") {
-        return child;
+    try {
+      var children = figma.currentPage.children || [];
+      for (var i = 0; i < children.length; i++) {
+        var child = children[i];
+        if (child.type === "FRAME" && child.getPluginData(TOKENS_DOC_KEY) === "1") {
+          return child;
+        }
       }
+    } catch (e) {
     }
     return null;
   }

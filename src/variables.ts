@@ -158,12 +158,16 @@ var TOKENS_DOC_KEY = 'dsTokensDoc'
 var TOKENS_CONFIG_KEY = 'dsTokensConfig'
 
 function findTokensDocFrame(): FrameNode | null {
-  var children = figma.currentPage.children || []
-  for (var i = 0; i < children.length; i++) {
-    var child = children[i] as any
-    if (child.type === 'FRAME' && child.getPluginData(TOKENS_DOC_KEY) === '1') {
-      return child as FrameNode
+  try {
+    var children = figma.currentPage.children || []
+    for (var i = 0; i < children.length; i++) {
+      var child = children[i] as any
+      if (child.type === 'FRAME' && child.getPluginData(TOKENS_DOC_KEY) === '1') {
+        return child as FrameNode
+      }
     }
+  } catch (e) {
+    // ignore — treated as "no doc frame yet"
   }
   return null
 }
