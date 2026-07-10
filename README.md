@@ -1,4 +1,4 @@
-# Nucleus Handoff
+# DS Handoff
 
 Figma plugin combining two previously separate plugins into one design-handoff toolkit:
 
@@ -16,7 +16,7 @@ One window (`ui.html`) with a **Component | Tokens** toggle:
 
 Both resync flows follow the same pattern: the generated frame is stamped with `pluginData` (source node id + module selection for Component; a doc marker + collection/style ids for Tokens) so it can be found and regenerated without depending on canvas selection.
 
-Launch routing via `figma.command` (`Plugins → Nucleus Handoff` submenu):
+Launch routing via `figma.command` (`Plugins → DS Handoff` submenu):
 
 | Entry point | Opens |
 |---|---|

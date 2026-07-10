@@ -3351,8 +3351,8 @@
   var activeLayoutStyleIds = [];
   var activeTextStyleIds = [];
   var mainFrame;
-  var TOKENS_DOC_KEY = "nucleusTokensDoc";
-  var TOKENS_CONFIG_KEY = "nucleusTokensConfig";
+  var TOKENS_DOC_KEY = "dsTokensDoc";
+  var TOKENS_CONFIG_KEY = "dsTokensConfig";
   function findTokensDocFrame() {
     var children = figma.currentPage.children || [];
     for (var i = 0; i < children.length; i++) {

@@ -1,4 +1,4 @@
-// Nucleus Handoff — entry point and unified UI controller.
+// DS Handoff — entry point and unified UI controller.
 //
 // One window, two tabs:
 //   Component — spec sheet documentation (spec.ts)

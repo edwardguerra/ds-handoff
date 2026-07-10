@@ -1,7 +1,7 @@
 {
-  "name": "nucleus-handoff",
+  "name": "ds-handoff",
   "version": "1.0.0",
-  "description": "Nucleus Handoff — Figma plugin combining Component Spec annotation sheets and Variables/Styles documentation",
+  "description": "DS Handoff — Figma plugin combining Component Spec annotation sheets and Variables/Styles documentation",
   "main": "code.js",
   "scripts": {
     "build": "esbuild src/main.ts --bundle --outfile=code.js --target=es2017",

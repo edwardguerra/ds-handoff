@@ -154,8 +154,8 @@ let mainFrame: FrameNode
 // The "Variables and Styles" doc frame is stamped with pluginData so it can
 // be found and regenerated in place without requiring the user to select it
 // (unlike the native Figma relaunch-button flow, which does).
-var TOKENS_DOC_KEY = 'nucleusTokensDoc'
-var TOKENS_CONFIG_KEY = 'nucleusTokensConfig'
+var TOKENS_DOC_KEY = 'dsTokensDoc'
+var TOKENS_CONFIG_KEY = 'dsTokensConfig'
 
 function findTokensDocFrame(): FrameNode | null {
   var children = figma.currentPage.children || []
