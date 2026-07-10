@@ -1,0 +1,1528 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8"/>
+    <style>
+      :root {
+        /* Keep these values synced with spec.ts shared tokens. */
+        --token-marker-color: #000000;
+        --token-preview-bg: #ededed;
+        --token-preview-radius: 24px;
+
+        /* Color tokens */
+        --color-bg-base: #ffffff;
+        --color-bg-error: #fff1f2;
+        --color-bg-success: #ecfdf3;
+
+        --color-text-primary: #1a1a1a;
+        --color-text-secondary: #666666;
+        --color-text-white: #fff;
+        --color-text-error: #b42318;
+        --color-text-success: #027a48;
+
+        --color-primary: #000000;
+
+        --color-border-default: #cccccc;
+        --color-border-hover: #cccccc;
+        --color-border-active: #484848;
+        --color-border-error: #fecdca;
+        --color-border-success: #abefc6;
+
+        /* Border radius tokens */
+        --radius-sm: 3px;
+        --radius-md: 6px;
+        --radius-pill: 1rem;
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      html, body {
+        height: 100%;
+      }
+      body {
+        font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        background: var(--color-bg-base);
+        color: var(--color-text-primary);
+        font-size: 12px;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      /* ── Tab bar ─────────────────────────────────────────────── */
+      .tabbar {
+        display: flex;
+        gap: 4px;
+        padding: 8px 12px;
+        border-bottom: 1px solid #e5e5e5;
+        background: var(--color-bg-base);
+        flex: none;
+      }
+      .tabbar .tab {
+        flex: 1;
+        padding: 8px 0;
+        border: none;
+        background: transparent;
+        border-radius: var(--radius-md);
+        font-family: inherit;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--color-text-secondary);
+        cursor: pointer;
+        transition: background-color 0.15s, color 0.15s;
+      }
+      .tabbar .tab:hover {
+        background: #ededed;
+      }
+      .tabbar .tab.active {
+        background: var(--color-primary);
+        color: var(--color-text-white);
+      }
+
+      /* ── Component tab (spec modules) ────────────────────────── */
+      #tab-component {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        padding: 16px;
+      }
+      #tab-component h2 {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--color-text-primary);
+        margin-bottom: 12px;
+      }
+      #tab-component .section {
+        margin-bottom: 16px;
+      }
+      #tab-component .section-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 8px;
+      }
+      #tab-component .section-label {
+        font-size: 12px;
+        color: var(--color-text-secondary);
+      }
+      #tab-component .toggle-all {
+        font-size: 12px;
+        color: var(--color-primary);
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 2px 6px;
+        border-radius: var(--radius-sm);
+      }
+      #tab-component .toggle-all:hover {
+        background: var(--color-bg-base);
+      }
+      #tab-component .module-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+      }
+      #tab-component .module-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 10px;
+        background: var(--color-bg-base);
+        border: 1px solid var(--color-border-default);
+        border-radius: var(--radius-md);
+        cursor: pointer;
+        transition: border-color 0.15s;
+      }
+      #tab-component .module-item:hover {
+        border-color: var(--color-border-hover);
+      }
+      #tab-component .module-item.active {
+        border-color: var(--color-border-active);
+        background: var(--color-bg-base);
+      }
+      #tab-component .module-item input {
+        accent-color: var(--color-primary);
+      }
+      #tab-component .module-name {
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--color-text-primary);
+      }
+      #tab-component .btn-row {
+        display: flex;
+        gap: 8px;
+        margin-top: 16px;
+      }
+      #tab-component button.btn-primary {
+        flex: 1;
+        padding: 10px 0;
+        border: none;
+        border-radius: var(--radius-pill);
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: opacity 0.15s;
+        background: var(--color-primary);
+        color: var(--color-text-white);
+      }
+      #tab-component button.btn-primary:hover {
+        opacity: 0.85;
+      }
+      #tab-component button.btn-primary:active {
+        opacity: 0.7;
+      }
+      #tab-component button.btn-secondary {
+        flex: 1;
+        padding: 10px 0;
+        border: 1px solid var(--color-border-active);
+        border-radius: var(--radius-pill);
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: opacity 0.15s;
+        background: var(--color-bg-base);
+        color: var(--color-text-primary);
+        display: none;
+      }
+      #tab-component button.btn-secondary.visible {
+        display: block;
+      }
+      #tab-component button.btn-secondary:hover {
+        opacity: 0.85;
+      }
+      #tab-component button.btn-secondary:active {
+        opacity: 0.7;
+      }
+      #tab-component .status {
+        margin-top: 12px;
+        padding: 10px;
+        border-radius: var(--radius-md);
+        font-size: 12px;
+        display: none;
+      }
+      #tab-component .status.error {
+        display: block;
+        background: var(--color-bg-error);
+        color: var(--color-text-error);
+        border: 1px solid var(--color-border-error);
+      }
+      #tab-component .status.success {
+        display: block;
+        background: var(--color-bg-success);
+        color: var(--color-text-success);
+        border: 1px solid var(--color-border-success);
+      }
+      #tab-component .selection-hint {
+        margin-top: 12px;
+        padding: 10px;
+        background: var(--color-bg-base);
+        border-radius: var(--radius-md);
+        border: 1px solid var(--color-border-default);
+        color: var(--color-text-secondary);
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      #tab-component .selection-hint.muted {
+        color: var(--color-text-secondary);
+      }
+
+      /* ── Tokens tab (variables/styles) ───────────────────────── */
+      /* Scoped via native CSS nesting so its tokens and generic
+         selectors (button, input[type=checkbox], .section) don't
+         leak into the Component tab. */
+      #tab-tokens {
+        --base: #ffffff;
+        --bg: #f7f7f7;
+        --card: #ffffff;
+
+        --text-inverse: #ffffff;
+        --text-primary: #000000;
+        --text-secondary: #4a4a4a;
+
+        --accent: #000000;
+        --accent--hover: #666666;
+        --muted: #f3f3f5;
+        --hover-bg: #ededed;
+
+        --border: #ededed;
+        --border-dark: #c9c9c9;
+        --ticker: #666666;
+
+        --accent-600: #333333;
+
+        --radius-sm: 6px;
+        --radius-md: 12px;
+        --radius-lg: 16px;
+        --radius-round: 9999px;
+
+        flex: 1;
+        min-height: 0;
+        display: none; /* toggled to flex by setTab */
+        flex-direction: column;
+        position: relative;
+        padding: 12px;
+        overflow: hidden;
+        color: var(--text-primary);
+        font-size: 13px;
+
+        .card {
+          flex: 1;
+          padding-right: 32px;
+          padding-bottom: 80px;
+          overflow: auto;
+        }
+        h3 {
+          margin: 0 0 4px;
+          font-size: 16px;
+        }
+        #summary {
+          margin-top: 6px;
+          color: var(--text-secondary);
+          font-size: 13px;
+        }
+        .columns {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 12px;
+          margin-top: 12px;
+        }
+        .panel {
+          border-radius: var(--radius-sm);
+          flex: 1 1 auto;
+          overflow: visible;
+          border: 1px solid rgba(0,0,0,0.06);
+          padding: 16px;
+          display: flex;
+          flex-direction: column;
+          background: var(--card);
+          box-shadow: none;
+        }
+        .panel h4 {
+          margin: 0 0 8px;
+          font-size: 15px;
+          padding: 0;
+          font-weight: 600;
+          border: none;
+          background: transparent;
+        }
+        .panel-header {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin: -16px -16px 12px;
+          font-size: 15px;
+          font-weight: 600;
+          cursor: pointer;
+          padding: 12px 16px;
+          border-bottom: 1px solid var(--border);
+          transition: background-color 0.15s ease;
+        }
+        .panel-header:hover {
+          background-color: var(--hover-bg);
+        }
+
+        /* Subtle scrollbar for panels */
+        .panel::-webkit-scrollbar {
+          width: 8px;
+          height: 8px;
+        }
+        .panel::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        .panel::-webkit-scrollbar-thumb {
+          border-radius: 6px;
+        }
+        .item {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 8px;
+        }
+
+        .section {
+          position: relative;
+        }
+        .section-title {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-weight: 400;
+          font-size: 15px;
+          cursor: pointer;
+          padding: 4px;
+          margin: -4px;
+          border-radius: 6px;
+          transition: background-color 0.15s ease;
+          width: 100%;
+          -webkit-user-select: none;
+          -moz-user-select: none;
+          -ms-user-select: none;
+          user-select: none;
+        }
+        .section-title:hover {
+          background-color: var(--hover-bg);
+        }
+        .section-title:focus {
+          outline: 2px solid var(--accent-600);
+          outline-offset: 2px;
+          border-radius: 6px;
+        }
+        .section-title.focused {
+          outline: 2px solid var(--accent-600);
+          outline-offset: 2px;
+          border-radius: 6px;
+        }
+        /* Apply same focus styles to child labels so styles have shared focus visuals */
+        .children label.focused,
+        .children label:focus {
+          outline: 2px solid var(--accent-600);
+          outline-offset: 2px;
+          border-radius: 6px;
+        }
+        .children {
+          position: relative;
+          padding-left: 22px;
+          display: flex;
+          flex-direction: column;
+          gap: 0;
+        }
+
+        /* hide specific style items visually but keep them in the DOM */
+        .children .hidden-item {
+          display: none;
+        }
+
+        /* Hide all child style items in style panels */
+        #colorStyles .children,
+        #effectStyles .children,
+        #layoutStyles .children,
+        #textStyles .children {
+          display: none !important;
+        }
+
+        .children::before {
+          content: '';
+          position: absolute;
+          top: 6px;
+          left: 6px;
+          bottom: 4px;
+          width: 2px;
+          background: var(--ticker);
+          z-index: 1;
+        }
+
+        .children label {
+          display: block;
+          width: 100%;
+          position: relative;
+          padding: 6px 0;
+          margin-left: 0;
+          cursor: pointer;
+          border-radius: 6px;
+          transition: background-color 0.15s ease;
+          text-transform: capitalize;
+        }
+        .children label:hover {
+          background-color: var(--hover-bg);
+        }
+        .text-props {
+          display: block;
+          color: var(--text-secondary);
+          font-size: 12px;
+          margin-left: 34px;
+          margin-top: 2px;
+        }
+        /* Make Variables' leaf labels visually match parent headers */
+        #collections .children label {
+          padding: 6px 4px;
+          margin-left: -4px;
+          border-radius: 6px;
+          cursor: pointer;
+        }
+
+        #collections .children label::before {
+          content: '';
+          position: absolute;
+          left: -14px;
+          width: 16px;
+          height: 2px;
+          background: var(--ticker);
+          z-index: 2;
+          top: 50%;
+          transform: translateY(-50%);
+        }
+
+        .children label::before {
+          content: '';
+          position: absolute;
+          left: -14px;
+          width: 16px;
+          height: 2px;
+          background: var(--ticker);
+          z-index: 2;
+          top: 50%;
+          transform: translateY(-50%);
+        }
+
+        /* checkbox styling matching sample */
+        input[type=checkbox] {
+          -webkit-appearance: none;
+          appearance: none;
+          width: 24px;
+          height: 24px;
+          border-radius: var(--radius-sm);
+          border: 1px solid var(--border);
+          background: var(--base);
+          vertical-align: middle;
+          position: relative;
+          margin-right: 8px;
+          cursor: pointer;
+          transition: border-color 0.15s ease, background-color 0.15s ease;
+        }
+        input[type=checkbox]:hover {
+          border-color: var(--border-dark);
+        }
+        input[type=checkbox]:checked {
+          background: var(--accent);
+          border-color: var(--accent);
+        }
+        input[type=checkbox]:checked:after {
+          content: '';
+          position: absolute;
+          left: 6px;
+          top: 2px;
+          width: 6px;
+          height: 12px;
+          border: solid var(--text-inverse);
+          border-width: 0 2px 2px 0;
+          transform: rotate(45deg);
+        }
+
+        .controls {
+          display: flex;
+          gap: 8px;
+        }
+        button {
+          appearance: none;
+          border: 1px solid var(--border);
+          background: white;
+          padding: 8px 12px;
+          border-radius: 8px;
+          cursor: pointer;
+          font-size: 13px;
+          font-family: inherit;
+        }
+        button.primary {
+          background: var(--accent);
+          color: var(--text-inverse);
+          border-color: transparent;
+        }
+        button.ghost {
+          background: transparent;
+          border: 1px solid var(--border);
+          color: var(--text-secondary);
+        }
+
+        .actions {
+          display: flex;
+          gap: 24px;
+        }
+        .footer {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 12px;
+          margin-top: 0;
+          position: absolute;
+          bottom: 0;
+          left: 0;
+          right: 0;
+          width: 100%;
+          background: rgba(255,255,255,0.96);
+          padding: 12px 16px;
+          z-index: 9999;
+          pointer-events: auto;
+          border-top: 1px solid var(--border);
+        }
+        .footer button {
+          z-index: 10000;
+        }
+        .footer .section-title:hover {
+          background-color: transparent;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="tabbar">
+      <button class="tab active" data-tab="component">Component</button>
+      <button class="tab" data-tab="tokens">Tokens</button>
+    </div>
+
+    <!-- ── Component tab: spec sheet documentation ─────────────── -->
+    <div id="tab-component">
+      <h2>Component Handoff</h2>
+
+      <div class="section">
+        <div class="section-header">
+          <div class="section-label">Modules</div>
+          <button class="toggle-all" id="toggle-all">Deselect All</button>
+        </div>
+        <div class="module-grid">
+          <label class="module-item active" id="mod-dimensions">
+            <input type="checkbox" checked data-module="dimensions">
+            <span class="module-name">Dimensions</span>
+          </label>
+          <label class="module-item active" id="mod-spacing">
+            <input type="checkbox" checked data-module="spacing">
+            <span class="module-name">Spacing</span>
+          </label>
+          <label class="module-item active" id="mod-anatomy">
+            <input type="checkbox" checked data-module="anatomy">
+            <span class="module-name">Anatomy</span>
+          </label>
+          <label class="module-item active" id="mod-styles">
+            <input type="checkbox" checked data-module="styles">
+            <span class="module-name">Styles</span>
+          </label>
+          <label class="module-item active" id="mod-variables">
+            <input type="checkbox" checked data-module="variables">
+            <span class="module-name">Variables</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="selection-hint muted" id="state-info">Select a component instance to generate spec documentation.</div>
+
+      <div class="btn-row">
+        <button class="btn-primary" id="generate">Generate Specs</button>
+        <button class="btn-secondary" id="resync" title="Regenerate the spec sheets linked to this selection">Resync</button>
+      </div>
+
+      <div class="status" id="status"></div>
+    </div>
+
+    <!-- ── Tokens tab: variables/styles documentation ──────────── -->
+    <div id="tab-tokens">
+      <div class="card">
+        <h3>Document variables and styles</h3>
+        <div id="summary"></div>
+
+        <div class="columns">
+          <div class="panel">
+            <label class="panel-header">
+              <input type="checkbox" id="selectAllVariables" checked>
+              <span>Variables</span>
+            </label>
+
+            <div class="box-scroll">
+              <div id="collections"></div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <label class="panel-header">
+              <input type="checkbox" id="selectAllStyles" checked>
+              <span>Styles</span>
+            </label>
+            <div class="box-scroll">
+              <div class="section-title" role="group" aria-label="Color">
+                <input type="checkbox" id="selectColorStyles" checked data-target="colorStyles">
+                <label for="selectColorStyles">Color</label>
+              </div>
+              <div class="children" id="colorStyles" style="display:none;"></div>
+              <div style="margin:8px 0 8px; display:flex; align-items:center; gap:8px">
+                <div class="section-title" role="group" aria-label="Effects">
+                  <input type="checkbox" id="selectEffectStyles" checked data-target="effectStyles">
+                  <label for="selectEffectStyles">Effects</label>
+                </div>
+              </div>
+              <div class="children" id="effectStyles" style="display:none;"></div>
+              <div style="margin:8px 0 8px; display:flex; align-items:center; gap:8px">
+                <div class="section-title" role="group" aria-label="Text">
+                  <input type="checkbox" id="selectTextStyles" checked data-target="textStyles">
+                  <label for="selectTextStyles">Text</label>
+                </div>
+              </div>
+              <div class="children" id="textStyles" style="display:none;"></div>
+              <div style="margin:8px 0 0; display:flex; align-items:center; gap:8px">
+                <div class="section-title" role="group" aria-label="Layout">
+                  <input type="checkbox" id="selectLayoutStyles" checked data-target="layoutStyles">
+                  <label for="selectLayoutStyles">Layout</label>
+                </div>
+              </div>
+              <div class="children" id="layoutStyles" style="display:none;"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="footer">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <label class="section-title" style="margin:0; display:flex; align-items:center; gap:8px; padding-left:32px;">
+              <input type="checkbox" id="selectAll">
+              <span>Select All</span>
+            </label>
+          </div>
+          <div class="actions">
+            <button class="ghost" id="tokens-resync" style="display:none;" title="Regenerate this documentation with its last-used selection">Resync</button>
+            <button class="secondary" id="cancel">Cancel</button>
+            <button class="primary" id="confirm">Confirm</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // ═══ Tab switching ═══════════════════════════════════════════
+      var TAB_SIZES = {
+        component: { width: 320, height: 460 },
+        tokens: { width: 560, height: 500 }
+      };
+
+      function setTab(name) {
+        if (name !== 'tokens') name = 'component';
+        document.getElementById('tab-component').style.display = name === 'component' ? 'block' : 'none';
+        document.getElementById('tab-tokens').style.display = name === 'tokens' ? 'flex' : 'none';
+        document.querySelectorAll('.tabbar .tab').forEach(function (btn) {
+          btn.classList.toggle('active', btn.dataset.tab === name);
+        });
+        var size = TAB_SIZES[name];
+        parent.postMessage({ pluginMessage: { type: 'ui-resize', width: size.width, height: size.height } }, '*');
+      }
+
+      document.querySelectorAll('.tabbar .tab').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          setTab(btn.dataset.tab);
+        });
+      });
+
+      // ═══ Component tab logic (spec modules) ══════════════════════
+      var checkboxes = document.querySelectorAll('.module-item input');
+      var toggleBtn = document.getElementById('toggle-all');
+      var stateInfo = document.getElementById('state-info');
+      var resyncBtn = document.getElementById('resync');
+
+      function syncResyncButton(count) {
+        if (count > 0) {
+          resyncBtn.classList.add('visible');
+          resyncBtn.textContent = count > 1 ? 'Resync (' + count + ')' : 'Resync';
+        } else {
+          resyncBtn.classList.remove('visible');
+        }
+      }
+
+      function updateToggleLabel() {
+        var allChecked = true;
+        checkboxes.forEach(function (cb) {
+          if (!cb.checked) {
+            allChecked = false;
+          }
+        });
+        toggleBtn.textContent = allChecked
+          ? 'Deselect All'
+          : 'Select All';
+      }
+
+      function syncSelectionState(selection) {
+        if (selection && selection.hasStateTarget) {
+          stateInfo.textContent = selection.message;
+          stateInfo.className = 'selection-hint';
+        } else {
+          stateInfo.textContent = selection && selection.message
+            ? selection.message
+            : 'Select a component instance to generate spec documentation.';
+          stateInfo.className = 'selection-hint muted';
+        }
+      }
+
+      // Module checkbox styling
+      checkboxes.forEach(function (cb) {
+        cb.addEventListener('change', function () {
+          var item = cb.closest('.module-item');
+          if (cb.checked)
+            item.classList.add('active');
+          else
+            item.classList.remove('active');
+          updateToggleLabel();
+        });
+      });
+
+      // Toggle all: if all checked → uncheck all, otherwise → check all
+      toggleBtn.onclick = function (e) {
+        e.preventDefault();
+        var allChecked = true;
+        checkboxes.forEach(function (cb) {
+          if (!cb.checked) {
+            allChecked = false;
+          }
+        });
+
+        var newState = !allChecked;
+        checkboxes.forEach(function (cb) {
+          cb.checked = newState;
+          var item = cb.closest('.module-item');
+          if (newState) {
+            item.classList.add('active');
+          } else {
+            item.classList.remove('active');
+          }
+        });
+        updateToggleLabel();
+      };
+
+      function readDesignTokens() {
+        var rootStyles = getComputedStyle(document.documentElement);
+        return {
+          markerColor: rootStyles
+            .getPropertyValue('--token-marker-color')
+            .trim(),
+          previewBg: rootStyles
+            .getPropertyValue('--token-preview-bg')
+            .trim(),
+          previewRadius: rootStyles
+            .getPropertyValue('--token-preview-radius')
+            .trim()
+        };
+      }
+
+      // Generate
+      document
+        .getElementById('generate')
+        .onclick = function () {
+          var modules = {};
+          checkboxes.forEach(function (cb) {
+            modules[cb.dataset.module] = cb.checked;
+          });
+          showStatus('Generating...', 'success');
+          parent.postMessage({
+            pluginMessage: {
+              type: 'generate-specs',
+              modules: modules,
+              tokens: readDesignTokens()
+            }
+          }, '*');
+        };
+
+      // Resync: regenerate the sheets linked to the current selection
+      resyncBtn.onclick = function () {
+        var modules = {};
+        checkboxes.forEach(function (cb) {
+          modules[cb.dataset.module] = cb.checked;
+        });
+        showStatus('Resyncing...', 'success');
+        parent.postMessage({
+          pluginMessage: {
+            type: 'resync-specs',
+            modules: modules,
+            tokens: readDesignTokens()
+          }
+        }, '*');
+      };
+
+      function showStatus(msg, type) {
+        var el = document.getElementById('status');
+        el.textContent = msg;
+        el.className = 'status ' + type;
+      }
+
+      function handleSpecUiMessage(msg) {
+        if (msg.type === 'selection-state') {
+          syncSelectionState(msg.selection || null);
+          syncResyncButton(msg.resyncableCount || 0);
+        }
+        if (msg.type === 'success')
+          showStatus(msg.message, 'success');
+        if (msg.type === 'error')
+          showStatus(msg.message, 'error');
+        if (msg.type === 'figma-vars')
+          receiveFigmaVars(msg.vars, msg.debug);
+      }
+
+      function receiveFigmaVars(vars, debug) {}
+
+      // ═══ Tokens tab logic (variables/styles) ═════════════════════
+      const collectionsEl = document.getElementById('collections')
+      const summary = document.getElementById('summary')
+
+      // make existing static section-title labels focusable only when they don't contain inputs
+      document
+        .querySelectorAll('#tab-tokens .section-title')
+        .forEach(el => {
+          if (!el.querySelector('input') && !el.hasAttribute('tabindex'))
+            el.tabIndex = 0
+        })
+
+      // Attach focus/blur handlers to checkbox inputs so their parent label shows focus
+      function attachLabelFocusHandlers(container) {
+        const root = container
+          ? document.getElementById(container)
+          : document
+        if (!root)
+          return
+          // section headers with inputs
+        Array
+          .from(root.querySelectorAll('.section-title'))
+          .forEach(header => {
+            const input = header.querySelector('input')
+            if (!input)
+              return
+            input.addEventListener('focus', () => header.classList.add('focused'))
+            input.addEventListener('blur', () => header.classList.remove('focused'))
+          })
+        // child labels
+        Array
+          .from(root.querySelectorAll('.children label'))
+          .forEach(lab => {
+            const input = lab.querySelector('input')
+            if (!input)
+              return
+            input.addEventListener('focus', () => lab.classList.add('focused'))
+            input.addEventListener('blur', () => lab.classList.remove('focused'))
+          })
+      }
+
+      // Convert text to title case
+      function toTitleCase(str) {
+        return str.replace(/\w\S*/g, function (txt) {
+          return txt
+            .charAt(0)
+            .toUpperCase() + txt
+            .substr(1)
+            .toLowerCase();
+        });
+      }
+
+      function renderCollections(cols) {
+        collectionsEl.innerHTML = ''
+        cols.forEach(c => {
+          const id = 'col-' + c.id
+
+          const section = document.createElement('div')
+          section.className = 'section'
+
+          const checkbox = document.createElement('input')
+          checkbox.type = 'checkbox'
+          checkbox.id = id
+          checkbox.checked = true
+          checkbox.dataset.id = c.id
+
+          const header = document.createElement('label')
+          header.className = 'section-title'
+          header.htmlFor = id
+          header.appendChild(checkbox)
+
+          const title = document.createElement('div')
+          title.textContent = toTitleCase(c.name)
+          header.appendChild(title)
+          section.appendChild(header)
+
+          collectionsEl.appendChild(section)
+        })
+        attachLabelFocusHandlers('collections')
+      }
+
+      const tokensResyncBtn = document.getElementById('tokens-resync')
+
+      function syncTokensResyncButton(available) {
+        tokensResyncBtn.style.display = available ? '' : 'none'
+      }
+
+      function handleTokensUiMessage(msg) {
+        if (msg.type === 'tokens-init') {
+          const items = msg.selection || []
+
+          renderCollections(msg.collections || [])
+          renderStyleList(msg.colorStyles || [], 'colorStyles')
+          renderStyleList(msg.effectStyles || [], 'effectStyles')
+          renderStyleList(msg.textStyles || [], 'textStyles')
+          renderStyleList(msg.layoutStyles || [], 'layoutStyles')
+          // ensure global Select All reflects initial state
+          if (typeof updateSelectAllState === 'function')
+            updateSelectAllState()
+          if (typeof updatePanelCheckboxes === 'function')
+            updatePanelCheckboxes()
+          syncTokensResyncButton(!!msg.resyncAvailable)
+        }
+        if (msg.type === 'tokens-status') {
+          summary.textContent = msg.text || ''
+        }
+        if (msg.type === 'tokens-progress') {
+          summary.textContent = msg.text || ''
+        }
+        if (msg.type === 'tokens-resync-state') {
+          syncTokensResyncButton(!!msg.available)
+        }
+      }
+
+      tokensResyncBtn.onclick = () => {
+        summary.textContent = 'Resyncing...'
+        parent.postMessage({ pluginMessage: { type: 'tokens-resync' } }, '*')
+      }
+
+      // Select/unselect all Color styles
+      const selectColorStylesEl = document.getElementById('selectColorStyles')
+      // expose globals for any external scripts that reference these names
+      window.selectColorStylesEl = selectColorStylesEl
+      window.selectEffectStylesEl = window.selectEffectStylesEl || null
+      window.selectTextStylesEl = window.selectTextStylesEl || null
+      window.selectLayoutStylesEl = window.selectLayoutStylesEl || null
+
+      // Global Select All (footer) — toggles every leaf checkbox
+      const selectAllEl = document.getElementById('selectAll')
+      window.selectAllEl = selectAllEl || window.selectAllEl || null
+
+      function updateSelectAllState() {
+        if (!selectAllEl)
+          return
+          // use a global selector for any "leaf" style checkbox (those with a dataset.id)
+        const leafCBs = Array.from(document.querySelectorAll('input[type="checkbox"][data-id]'))
+        if (leafCBs.length === 0) {
+          selectAllEl.checked = false
+          selectAllEl.indeterminate = false
+          return
+        }
+        const all = leafCBs.every(cb => cb.checked)
+        const some = leafCBs.some(cb => cb.checked)
+        selectAllEl.checked = all
+        selectAllEl.indeterminate = !all && some
+      }
+
+      // When any checkbox changes anywhere, refresh the Select All state
+      document.addEventListener('change', (e) => {
+        // only recalc for checkbox changes
+        if (e.target && e.target.type === 'checkbox') {
+          updateSelectAllState()
+        }
+      })
+
+      if (selectAllEl) {
+        selectAllEl.addEventListener('change', () => {
+          const checked = selectAllEl.checked
+          // toggle all leaf checkboxes (any checkbox that carries a dataset.id)
+          document
+            .querySelectorAll('input[type="checkbox"][data-id]')
+            .forEach(cb => cb.checked = checked)
+          // sync parent/header states
+          updateCollectionParentStates()
+          updateParentState('colorStyles')
+          updateParentState('effectStyles')
+          updateParentState('textStyles')
+          updateParentState('layoutStyles')
+          // sync section-level selects (color/effect/text/layout)
+          updateSectionSelectState('colorStyles', 'selectColorStyles')
+          updateSectionSelectState('effectStyles', 'selectEffectStyles')
+          updateSectionSelectState('textStyles', 'selectTextStyles')
+          updateSectionSelectState('layoutStyles', 'selectLayoutStyles')
+          // sync panel-level checkboxes
+          if (typeof updatePanelCheckboxes === 'function')
+            updatePanelCheckboxes()
+        })
+      }
+
+      // Panel-level select all for Variables
+      const selectAllVariablesEl = document.getElementById('selectAllVariables')
+      if (selectAllVariablesEl) {
+        selectAllVariablesEl.addEventListener('change', () => {
+          const checked = selectAllVariablesEl.checked
+          // toggle all checkboxes in the collections panel
+          document
+            .querySelectorAll('#collections input[type="checkbox"]')
+            .forEach(cb => cb.checked = checked)
+          updateCollectionParentStates()
+          updateSelectAllState()
+        })
+      }
+
+      // Panel-level select all for Styles
+      const selectAllStylesEl = document.getElementById('selectAllStyles')
+      if (selectAllStylesEl) {
+        selectAllStylesEl.addEventListener('change', () => {
+          const checked = selectAllStylesEl.checked
+          // toggle all section-level checkboxes (Color, Effects, Text, Layout)
+          const sectionSelects = ['selectColorStyles', 'selectEffectStyles', 'selectTextStyles', 'selectLayoutStyles']
+          sectionSelects.forEach(id => {
+            const el = document.getElementById(id)
+            if (el)
+              el.checked = checked
+          })
+          // toggle all leaf style checkboxes
+          document
+            .querySelectorAll('#colorStyles input[type="checkbox"][data-id], #effectStyles input[type="checkbox"][data-id], #textStyles input[type="checkbox"][data-id], #layoutStyles input[type="checkbox"][data-id]')
+            .forEach(cb => cb.checked = checked)
+          // sync parent states
+          updateParentState('colorStyles')
+          updateParentState('effectStyles')
+          updateParentState('textStyles')
+          updateParentState('layoutStyles')
+          updateSelectAllState()
+        })
+      }
+
+      // Update panel-level checkboxes based on children
+      function updatePanelCheckboxes() {
+        // Update Variables panel checkbox
+        if (selectAllVariablesEl) {
+          const variablesCBs = Array.from(document.querySelectorAll('#collections input[type="checkbox"][data-id]'))
+          if (variablesCBs.length > 0) {
+            const all = variablesCBs.every(cb => cb.checked)
+            const some = variablesCBs.some(cb => cb.checked)
+            selectAllVariablesEl.indeterminate = !all && some
+            selectAllVariablesEl.checked = all
+          }
+        }
+
+        // Update Styles panel checkbox
+        if (selectAllStylesEl) {
+          const sectionCheckboxes = ['selectColorStyles', 'selectEffectStyles', 'selectTextStyles', 'selectLayoutStyles']
+            .map(id => document.getElementById(id))
+            .filter(el => el)
+          if (sectionCheckboxes.length > 0) {
+            const all = sectionCheckboxes.every(cb => cb.checked)
+            const some = sectionCheckboxes.some(cb => cb.checked)
+            selectAllStylesEl.indeterminate = !all && some
+            selectAllStylesEl.checked = all
+          }
+        }
+      }
+
+      // When any checkbox changes, also update panel-level checkboxes
+      document.addEventListener('change', (e) => {
+        if (e.target && e.target.type === 'checkbox') {
+          updatePanelCheckboxes()
+        }
+      })
+
+      function updateParentState(containerId) {
+        const container = document.getElementById(containerId)
+        if (!container)
+          return
+        Array
+          .from(container.querySelectorAll('.section'))
+          .forEach(section => {
+            const parent = section.querySelector('input[data-group]')
+            const childCBs = Array.from(section.querySelectorAll('.children input[type="checkbox"][data-id]'))
+            if (!parent || childCBs.length === 0)
+              return
+            const all = childCBs.every(cb => cb.checked)
+            const some = childCBs.some(cb => cb.checked)
+            parent.indeterminate = !all && some
+            parent.checked = all
+          })
+        // keep section-level select-all in sync (if present)
+        const mapping = {
+          'colorStyles': 'selectColorStyles',
+          'effectStyles': 'selectEffectStyles',
+          'textStyles': 'selectTextStyles',
+          'layoutStyles': 'selectLayoutStyles'
+        }
+        const selectId = mapping[containerId]
+        if (selectId)
+          updateSectionSelectState(containerId, selectId)
+      }
+
+      // Update the section-level select-all checkbox based on all child checkboxes
+      function updateSectionSelectState(containerId, selectId) {
+        const container = document.getElementById(containerId)
+        const selectEl = document.getElementById(selectId)
+        if (!container || !selectEl)
+          return
+        const childCBs = Array.from(container.querySelectorAll('.children input[type="checkbox"][data-id]'))
+        if (childCBs.length === 0) {
+          // Allow user preference to remain when no child styles exist
+          selectEl.indeterminate = false
+          return
+        }
+        const all = childCBs.every(cb => cb.checked)
+        const some = childCBs.some(cb => cb.checked)
+        selectEl.indeterminate = !all && some
+        selectEl.checked = all
+      }
+
+      // Update collection parents (collections panel uses different dataset attributes)
+      function updateCollectionParentStates() {
+        Array
+          .from(collectionsEl.querySelectorAll('.section'))
+          .forEach(section => {
+            const parent = section.querySelector('input[type="checkbox"]')
+            const childCBs = Array.from(section.querySelectorAll('.children input[type="checkbox"]'))
+            if (!parent || childCBs.length === 0)
+              return
+            const all = childCBs.every(cb => cb.checked)
+            const some = childCBs.some(cb => cb.checked)
+            parent.indeterminate = !all && some
+            parent.checked = all
+          })
+      }
+
+      if (selectColorStylesEl) {
+        selectColorStylesEl.addEventListener('change', () => {
+          const checked = selectColorStylesEl.checked
+          // only toggle leaf style checkboxes (those with a dataset.id)
+          document
+            .querySelectorAll('#colorStyles input[type="checkbox"][data-id]')
+            .forEach(cb => cb.checked = checked)
+          updateParentState('colorStyles')
+        })
+        // clicking the header should select all if none, or unselect if some/all
+        const colorHeader = selectColorStylesEl.closest('.section-title')
+        if (colorHeader) {
+          colorHeader.addEventListener('click', (e) => {
+            // let native clicks on the input/label behave normally
+            if (e.target && e.target.closest && e.target.closest('input, label'))
+              return
+            const target = selectColorStylesEl.dataset.target || 'colorStyles'
+            const childCBs = Array.from(document.querySelectorAll(`#${target} input[type=\"checkbox\"][data-id]`))
+            if (!childCBs.length) {
+              // fallback: toggle the select checkbox itself
+              selectColorStylesEl.checked = !selectColorStylesEl.checked
+              updateParentState(target)
+              return
+            }
+            const all = childCBs.every(cb => cb.checked)
+            const some = childCBs.some(cb => cb.checked)
+            const newChecked = !(all || some)
+            childCBs.forEach(cb => cb.checked = newChecked)
+            selectColorStylesEl.checked = newChecked
+            selectColorStylesEl.indeterminate = false
+            updateParentState(target)
+          })
+        }
+        // native label behavior toggles the checkbox; no manual click handler needed
+      }
+
+      const selectEffectStylesEl = document.getElementById('selectEffectStyles')
+      if (selectEffectStylesEl) {
+        selectEffectStylesEl.addEventListener('change', () => {
+          const checked = selectEffectStylesEl
+            .checked
+            document
+            .querySelectorAll('#effectStyles input[type="checkbox"][data-id]')
+            .forEach(cb => cb.checked = checked)
+          updateParentState('effectStyles')
+        })
+        const effectHeader = selectEffectStylesEl.closest('.section-title')
+        if (effectHeader) {
+          effectHeader.addEventListener('click', (e) => {
+            if (e.target && e.target.closest && e.target.closest('input, label'))
+              return
+            const target = selectEffectStylesEl.dataset.target || 'effectStyles'
+            const childCBs = Array.from(document.querySelectorAll(`#${target} input[type=\"checkbox\"][data-id]`))
+            if (!childCBs.length) {
+              selectEffectStylesEl.checked = !selectEffectStylesEl.checked
+              updateParentState(target)
+              return
+            }
+            const all = childCBs.every(cb => cb.checked)
+            const some = childCBs.some(cb => cb.checked)
+            const newChecked = !(all || some)
+            childCBs.forEach(cb => cb.checked = newChecked)
+            selectEffectStylesEl.checked = newChecked
+            selectEffectStylesEl.indeterminate = false
+            updateParentState(target)
+          })
+        }
+        // native label behavior toggles the checkbox; no manual click handler needed
+      }
+
+      const selectTextStylesEl = document.getElementById('selectTextStyles')
+      if (selectTextStylesEl) {
+        selectTextStylesEl.addEventListener('change', () => {
+          const checked = selectTextStylesEl
+            .checked
+            document
+            .querySelectorAll('#textStyles input[type="checkbox"][data-id]')
+            .forEach(cb => cb.checked = checked)
+          updateParentState('textStyles')
+        })
+        const textHeader = selectTextStylesEl.closest('.section-title')
+        if (textHeader) {
+          textHeader.addEventListener('click', (e) => {
+            if (e.target && e.target.closest && e.target.closest('input, label'))
+              return
+            const target = selectTextStylesEl.dataset.target || 'textStyles'
+            const childCBs = Array.from(document.querySelectorAll(`#${target} input[type="checkbox"][data-id]`))
+            if (!childCBs.length) {
+              selectTextStylesEl.checked = !selectTextStylesEl.checked
+              updateParentState(target)
+              return
+            }
+            const all = childCBs.every(cb => cb.checked)
+            const some = childCBs.some(cb => cb.checked)
+            const newChecked = !(all || some)
+            childCBs.forEach(cb => cb.checked = newChecked)
+            selectTextStylesEl.checked = newChecked
+            selectTextStylesEl.indeterminate = false
+            updateParentState(target)
+          })
+        }
+      }
+
+      const selectLayoutStylesEl = document.getElementById('selectLayoutStyles')
+      if (selectLayoutStylesEl) {
+        selectLayoutStylesEl.addEventListener('change', () => {
+          const checked = selectLayoutStylesEl
+            .checked
+            document
+            .querySelectorAll('#layoutStyles input[type="checkbox"][data-id]')
+            .forEach(cb => cb.checked = checked)
+          updateParentState('layoutStyles')
+        })
+        const layoutHeader = selectLayoutStylesEl.closest('.section-title')
+        if (layoutHeader) {
+          layoutHeader.addEventListener('click', (e) => {
+            if (e.target && e.target.closest && e.target.closest('input, label'))
+              return
+            const target = selectLayoutStylesEl.dataset.target || 'layoutStyles'
+            const childCBs = Array.from(document.querySelectorAll(`#${target} input[type=\"checkbox\"][data-id]`))
+            if (!childCBs.length) {
+              selectLayoutStylesEl.checked = !selectLayoutStylesEl.checked
+              updateParentState(target)
+              return
+            }
+            const all = childCBs.every(cb => cb.checked)
+            const some = childCBs.some(cb => cb.checked)
+            const newChecked = !(all || some)
+            childCBs.forEach(cb => cb.checked = newChecked)
+            selectLayoutStylesEl.checked = newChecked
+            selectLayoutStylesEl.indeterminate = false
+            updateParentState(target)
+          })
+        }
+        // native label behavior toggles the checkbox; no manual click handler needed
+      }
+
+      function renderStyleList(list, containerId) {
+        const container = document.getElementById(containerId)
+        container.innerHTML = ''
+
+        function formatTextProps(s) {
+          if (!s)
+            return ''
+          const parts = []
+          // font family / style
+          const family = s.fontFamily || (s.fontName && (
+            typeof s.fontName === 'string'
+            ? s.fontName
+            : s.fontName.family))
+          const style = s.fontStyle || (s.fontName && s.fontName.style)
+          if (family)
+            parts.push((
+              style
+              ? (family + ' ' + style)
+              : family))
+
+            // size
+          if (s.fontSize)
+            parts.push((s.fontSize || '') + 'px')
+
+            // weight
+          if (s.fontWeight)
+            parts.push('w:' + s.fontWeight)
+
+            // line height may be object or number
+          if (s.lineHeight) {
+            const lh = (typeof s.lineHeight === 'object' && s.lineHeight.value !== undefined)
+              ? s.lineHeight.value
+              : s.lineHeight
+            parts.push('lh:' + lh)
+          }
+
+          // letter spacing may be object or number
+          if (typeof s.letterSpacing !== 'undefined') {
+            const ls = (typeof s.letterSpacing === 'object' && s.letterSpacing.value !== undefined)
+              ? s.letterSpacing.value
+              : s.letterSpacing
+            parts.push('ls:' + ls)
+          }
+
+          if (typeof s.paragraphSpacing !== 'undefined')
+            parts.push('ps:' + s.paragraphSpacing)
+          if (s.textDecoration)
+            parts.push(s.textDecoration)
+          if (s.textCase)
+            parts.push(s.textCase)
+
+            // color: prefer explicit hex, then alias id, else boolean flag
+          if (s.colorHex)
+            parts.push(s.colorHex)
+          else if (s.colorAliasId)
+            parts.push('alias')
+          else if (s.color)
+            parts.push('color')
+
+          return parts.join(' • ')
+        }
+
+        // Group by top-level segment but KEEP child checkboxes (so confirm collects leaf ids)
+        const groups = {}
+        list.forEach(s => {
+          const parts = s
+            .name
+            .split('/')
+          const top = parts[0] || s.name
+          groups[top] = groups[top] || []
+          groups[top].push(s)
+        })
+
+        Object
+          .keys(groups)
+          .forEach(topName => {
+            const section = document.createElement('div')
+            section.className = 'section'
+
+            // Parent checkbox (no dataset.id so it's ignored by confirm)
+            const parentId = containerId + '-group-' + topName.replace(/[^\w\-]/g, '_')
+            const parentCB = document.createElement('input')
+            parentCB.type = 'checkbox'
+            parentCB.id = parentId
+            parentCB.checked = true
+            parentCB.dataset.group = topName
+
+            const header = document.createElement('label')
+            header.className = 'section-title'
+            header.htmlFor = parentId
+            header.appendChild(parentCB)
+            header.appendChild(document.createTextNode(toTitleCase(topName)))
+            section.appendChild(header)
+
+            // children list (visible nested items). We keep real child checkboxes with dataset.id
+            const children = document.createElement('div')
+            // children container uses unified `.children` class
+            children.className = 'children'
+            groups[topName].forEach(s => {
+              const cid = containerId + '-' + s.id
+              const lab = document.createElement('label')
+              const ccb = document.createElement('input')
+              ccb.type = 'checkbox'
+              ccb.id = cid
+              ccb.checked = true
+              ccb.dataset.id = s.id
+              // show only the last segment for readability
+              const nameLabel = s
+                .name
+                .split('/')
+                .slice(-1)[0]
+              ccb.dataset.name = nameLabel
+              lab.appendChild(ccb)
+              lab.appendChild(document.createTextNode(' ' + toTitleCase(nameLabel)))
+              // If this is a text styles container, show summarized properties
+              if (containerId === 'textStyles') {
+                const props = formatTextProps(s)
+                if (props) {
+                  const span = document.createElement('span')
+                  span.className = 'text-props'
+                  span.textContent = props
+                  lab.appendChild(span)
+                }
+              }
+              // hide specific style names visually but leave inputs in DOM
+              const hideNames = ['red', 'blue', 'linear', 'focus']
+              const nameLower = (nameLabel || '').toLowerCase()
+              if (hideNames.indexOf(nameLower) !== -1) {
+                lab.classList.add('hidden-item')
+              }
+              // hide 'filled level' only for layout > grid
+              if (containerId === 'layoutStyles' && (topName || '').toLowerCase() === 'grid' && nameLower === 'filled level') {
+                lab.classList.add('hidden-item')
+              }
+              children.appendChild(lab)
+            })
+
+            // Parent toggles child checkboxes
+            parentCB.addEventListener('change', () => {
+              const checked = parentCB.checked
+              Array
+                .from(children.querySelectorAll('input[type="checkbox"][data-id]'))
+                .forEach(cb => cb.checked = checked)
+              // keep section/parent state in sync
+              updateParentState(containerId)
+            })
+
+            // keep parent indeterminate based on children
+            children.addEventListener('change', (e) => {
+              if (e.target && e.target.type === 'checkbox') {
+                const childCBs = Array.from(children.querySelectorAll('input[type="checkbox"][data-id]'))
+                if (childCBs.length) {
+                  const all = childCBs.every(cb => cb.checked)
+                  const some = childCBs.some(cb => cb.checked)
+                  parentCB.indeterminate = !all && some
+                  parentCB.checked = all
+                  // also update section-level select-all
+                  updateParentState(containerId)
+                }
+              }
+            })
+
+            section.appendChild(children)
+            container.appendChild(section)
+          })
+        // attach focus handlers for labels in this container
+        attachLabelFocusHandlers(containerId)
+      }
+
+      document
+        .getElementById('confirm')
+        .onclick = () => {
+          const selectedCollections = Array
+            .from(collectionsEl.querySelectorAll('input[type="checkbox"]'))
+            .filter(cb => cb.checked && typeof cb.dataset.collectionId === 'undefined')
+            .map(cb => cb.dataset.id)
+          const selectedColor = Array
+            .from(document.getElementById('colorStyles').querySelectorAll('input[type="checkbox"][data-id]'))
+            .filter(cb => cb.checked)
+            .map(cb => cb.dataset.id)
+
+          const selectedEffect = Array
+            .from(document.getElementById('effectStyles').querySelectorAll('input[type="checkbox"][data-id]'))
+            .filter(cb => cb.checked)
+            .map(cb => cb.dataset.id)
+
+          const selectedText = Array
+            .from(document.getElementById('textStyles').querySelectorAll('input[type="checkbox"][data-id]'))
+            .filter(cb => cb.checked)
+            .map(cb => cb.dataset.id)
+
+          const selectedLayout = Array
+            .from(document.getElementById('layoutStyles').querySelectorAll('input[type="checkbox"][data-id]'))
+            .filter(cb => cb.checked)
+            .map(cb => cb.dataset.id)
+
+          parent.postMessage({
+            pluginMessage: {
+              type: 'tokens-confirm',
+              collections: selectedCollections,
+              colorStyles: selectedColor,
+              effectStyles: selectedEffect,
+              textStyles: selectedText,
+              layoutStyles: selectedLayout
+            }
+          }, '*')
+        }
+      document
+        .getElementById('cancel')
+        .onclick = () => {
+          parent.postMessage({
+            pluginMessage: {
+              type: 'close'
+            }
+          }, '*')
+        }
+
+      // ═══ Message dispatch ════════════════════════════════════════
+      window.onmessage = function (event) {
+        var msg = event.data.pluginMessage;
+        if (!msg) return;
+        if (msg.type === 'set-tab') {
+          setTab(msg.tab);
+          return;
+        }
+        handleSpecUiMessage(msg);
+        handleTokensUiMessage(msg);
+      };
+
+      parent.postMessage({ pluginMessage: { type: 'ui-ready' } }, '*');
+    </script>
+  </body>
+</html>

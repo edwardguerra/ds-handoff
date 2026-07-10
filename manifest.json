@@ -1,0 +1,28 @@
+{
+  "name": "Nucleus Handoff",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "editorType": ["figma"],
+  "permissions": ["currentuser"],
+  "menu": [
+    { "name": "Component Spec", "command": "spec" },
+    { "name": "Variables", "command": "variables" }
+  ],
+  "relaunchButtons": [
+    {
+      "command": "rewrite",
+      "name": "Refresh variables",
+      "multipleSelection": true
+    },
+    {
+      "command": "create-autolayout",
+      "name": "Wrap in auto layout",
+      "multipleSelection": true
+    }
+  ],
+  "networkAccess": {
+    "allowedDomains": ["https://edwardguerra.com"],
+    "reasoning": "Component Spec UI assets; everything else is local"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "nucleus-handoff",
+  "version": "1.0.0",
+  "description": "Nucleus Handoff — Figma plugin combining Component Spec annotation sheets and Variables/Styles documentation",
+  "main": "code.js",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --outfile=code.js --target=es2017",
+    "watch": "npm run build -- --watch",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "author": "Edward Guerra",
+  "license": "",
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.124.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.9.3"
+  }
+}
