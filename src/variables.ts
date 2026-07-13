@@ -176,6 +176,31 @@ export function getTokensResyncState(): { available: boolean } {
   return { available: !!findTokensDocFrame() }
 }
 
+// Anchors the whole Tokens doc to whatever mode the current selection is
+// actually using, same mechanism as the Component tab's fix: read the
+// selected node's resolvedVariableModes and apply each one to the doc's
+// root frame. Individual swatches already set their own explicit mode per
+// column, but this keeps the doc's own top-level context consistent with
+// "the theme you're looking at" rather than an arbitrary default.
+function propagateSelectedVariableModes(target: FrameNode): void {
+  try {
+    var sel = figma.currentPage.selection[0] as any
+    if (!sel) return
+    var resolved = sel.resolvedVariableModes as { [collectionId: string]: string } | undefined
+    if (!resolved) return
+    var ids = Object.keys(resolved)
+    for (var i = 0; i < ids.length; i++) {
+      try {
+        target.setExplicitVariableModeForCollection(ids[i] as any, resolved[ids[i]])
+      } catch (e) {
+        // collection may no longer exist — skip it
+      }
+    }
+  } catch (e) {
+    // resolvedVariableModes unsupported on this node type — nothing to propagate
+  }
+}
+
 let variablesFrame: FrameNode
 let stylesFrame: FrameNode
 
@@ -330,6 +355,7 @@ async function regenerateTokensDoc(
   } else {
     createMainFrame()
   }
+  propagateSelectedVariableModes(mainFrame)
 
   figma.ui.postMessage({ type: 'tokens-status', text: 'Writing variables...' })
   await writeVariables(progress => figma.ui.postMessage({ type: 'tokens-progress', text: progress }))

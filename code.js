@@ -3416,6 +3416,22 @@
     }
     return null;
   }
+  function propagateSelectedVariableModes(target) {
+    try {
+      var sel = figma.currentPage.selection[0];
+      if (!sel) return;
+      var resolved = sel.resolvedVariableModes;
+      if (!resolved) return;
+      var ids = Object.keys(resolved);
+      for (var i = 0; i < ids.length; i++) {
+        try {
+          target.setExplicitVariableModeForCollection(ids[i], resolved[ids[i]]);
+        } catch (e) {
+        }
+      }
+    } catch (e) {
+    }
+  }
   var variablesFrame;
   var stylesFrame;
   function createMainFrame() {
@@ -3541,6 +3557,7 @@
     } else {
       createMainFrame();
     }
+    propagateSelectedVariableModes(mainFrame);
     figma.ui.postMessage({ type: "tokens-status", text: "Writing variables..." });
     await writeVariables((progress) => figma.ui.postMessage({ type: "tokens-progress", text: progress }));
     figma.ui.postMessage({ type: "tokens-status", text: "Writing styles..." });
