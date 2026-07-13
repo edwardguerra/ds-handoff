@@ -287,7 +287,7 @@
     panel.resize(width, height);
     panel.fills = solidPaint(TOKEN_PREVIEW_BG);
     panel.cornerRadius = TOKEN_PREVIEW_RADIUS;
-    panel.clipsContent = true;
+    panel.clipsContent = false;
     return panel;
   }
   async function makePreviewSourceNode(node) {

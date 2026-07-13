@@ -25,6 +25,8 @@ Resync doesn't require re-finding the exact source node. Any of these select and
 
 All sections share one width, `SHEET_INNER_WIDTH` (860, defined once in spec.ts). Anatomy and Variables always built against it; Properties and Layout & Spacing used to compute their own independent numbers (`PROPERTIES_CARD_WIDTH`, a hardcoded `410`), which is why a single-card property group or a two-column layout row could look narrower than the rest of the sheet with dead space beside it. Both now derive their card/column width from `SHEET_INNER_WIDTH`, so every section fills the same content width edge-to-edge. A section can still grow past that baseline if a component's real, unscaled size genuinely needs more room (Layout & Spacing does this deliberately via `allowScale=false`) — `equalizeSectionWidths` then brings the rest of the sheet up to match, same as before.
 
+`makeLightPreviewPanel` no longer clips (`clipsContent = false`). It used to, plus a rounded corner, which made any mismatch between the growth math and the content's actual render bounds show up as a visible crop. The growth math (`centerNodeInPanel`'s `allowScale=false` path) sizes the panel off the cloned node's layout `width`/`height`, which don't account for effects or anything else that can render outside them — so it can under-measure. Not clipping means that gap now shows as content occasionally overhanging the rounded rect rather than being silently cut off by it.
+
 Clicking `DS Handoff` in the Plugins menu always opens the unified UI directly on the Component tab — switch to Tokens with the in-app toggle. The only `figma.command` routing left is for contextual relaunch buttons:
 
 | Entry point | Opens |

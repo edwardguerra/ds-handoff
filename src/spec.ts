@@ -1722,7 +1722,14 @@ function makeLightPreviewPanel(width: number, height: number): FrameNode {
   panel.resize(width, height);
   panel.fills = solidPaint(TOKEN_PREVIEW_BG);
   panel.cornerRadius = TOKEN_PREVIEW_RADIUS;
-  panel.clipsContent = true;
+  // Growth logic elsewhere (centerNodeInPanel's allowScale=false path) sizes
+  // this panel from the cloned content's layout bounds (width/height), which
+  // don't account for effects, shadows, or anything else that can render
+  // outside them — so that growth can under-measure what's actually drawn.
+  // Rather than let a mismatch there silently clip against this panel's
+  // rounded corner, don't clip at all: worst case is a preview that pokes
+  // past its rounded rect, not one invisibly cut off.
+  panel.clipsContent = false;
   return panel;
 }
 
