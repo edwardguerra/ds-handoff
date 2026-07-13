@@ -3105,10 +3105,12 @@
     }
   }
   function registerSpecSelectionTracking() {
-    postSelectionStateToUI();
     figma.on("selectionchange", function() {
       postSelectionStateToUI();
     });
+  }
+  function pushSpecSelectionState() {
+    postSelectionStateToUI();
   }
   function handleSpecMessage(msg) {
     if (msg.type === "generate-specs") {
@@ -4648,6 +4650,7 @@
       if (msg.type === "ui-ready") {
         figma.ui.postMessage({ type: "set-tab", tab: initialTab });
         figma.ui.postMessage(getTokensInitData());
+        pushSpecSelectionState();
         return;
       }
       if (msg.type === "ui-resize") {

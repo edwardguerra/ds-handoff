@@ -9,7 +9,7 @@
 //   "Variables" menu item               → Tokens tab
 //   "Refresh variables" relaunch button → Tokens tab (rewrite flow)
 //   "Wrap in auto layout" relaunch      → headless, no UI
-import { registerSpecSelectionTracking, handleSpecMessage } from './spec';
+import { registerSpecSelectionTracking, pushSpecSelectionState, handleSpecMessage } from './spec';
 import { getTokensInitData, handleTokensConfirm, handleTokensResync, handleCreateAutoLayout } from './variables';
 
 var command = figma.command || '';
@@ -29,6 +29,7 @@ if (command === 'create-autolayout') {
     if (msg.type === 'ui-ready') {
       figma.ui.postMessage({ type: 'set-tab', tab: initialTab });
       figma.ui.postMessage(getTokensInitData());
+      pushSpecSelectionState();
       return;
     }
     if (msg.type === 'ui-resize') {

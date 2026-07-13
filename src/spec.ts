@@ -5255,10 +5255,17 @@ function arrangeSpecSheetsSideBySide(newSheets: FrameNode[], anchorX: number, an
 // ═══════════════════════════════════════════════════════════════════
 
 export function registerSpecSelectionTracking(): void {
-  postSelectionStateToUI();
   figma.on('selectionchange', function() {
     postSelectionStateToUI();
   });
+}
+
+// Called by main.ts once the UI signals 'ui-ready'. A push fired eagerly at
+// startup (before the UI iframe has attached its message listener) is a
+// window.postMessage race and can be silently dropped — this is the
+// reliable first push, matching how getTokensInitData() is delivered.
+export function pushSpecSelectionState(): void {
+  postSelectionStateToUI();
 }
 
 export function handleSpecMessage(msg: any): void {
