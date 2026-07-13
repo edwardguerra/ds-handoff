@@ -2968,6 +2968,17 @@
     } catch (e) {
     }
   }
+  function stampSectionsFrom(sheet, startIndex, key, sourceId) {
+    for (var i = startIndex; i < sheet.children.length; i++) {
+      var child = sheet.children[i];
+      if (!child || child.type !== "FRAME") continue;
+      try {
+        child.setPluginData("specSection", key);
+        child.setPluginData("sourceNodeId", sourceId);
+      } catch (e) {
+      }
+    }
+  }
   async function createReferenceStyleSpecSheetAsync(node, page, modules) {
     var b = getNodeBounds(node);
     var stateTarget = await findStateTargetAsync(node);
@@ -2985,20 +2996,32 @@
     sheet.paddingRight = 0;
     sheet.clipsContent = false;
     sheet.fills = solidPaint(COLOR_PAGE_BG);
+    var mark = sheet.children.length;
     var hero = makeSectionWrapper(node.name);
     hero.name = SPEC_PREFIX + "Hero Section";
     hero.itemSpacing = 0;
     sheet.appendChild(hero);
+    stampSectionsFrom(sheet, mark, "hero", node.id);
+    mark = sheet.children.length;
     sheet.appendChild(makeMetaSection());
+    stampSectionsFrom(sheet, mark, "meta", node.id);
     if (modules.anatomy) {
+      mark = sheet.children.length;
       await buildAnatomySheetSection(sheet, node);
+      stampSectionsFrom(sheet, mark, "anatomy", node.id);
     }
+    mark = sheet.children.length;
     await buildPropertiesSheetSection(sheet, node, stateTarget);
+    stampSectionsFrom(sheet, mark, "properties", node.id);
     if (modules.spacing || modules.dimensions) {
+      mark = sheet.children.length;
       await buildLayoutSheetSection(sheet, node);
+      stampSectionsFrom(sheet, mark, "layout", node.id);
     }
     if (modules.variables) {
+      mark = sheet.children.length;
       await buildVariablesSheetSection(sheet, node);
+      stampSectionsFrom(sheet, mark, "variables", node.id);
     }
     finalizeSheetWidth(sheet);
     sheet.x = b.x;
@@ -3007,6 +3030,125 @@
     sheet.setPluginData("sourceNodeId", node.id);
     sheet.setPluginData("specModules", JSON.stringify(modules || {}));
     return sheet;
+  }
+  async function buildSectionByKey(key, source, stateTarget) {
+    var temp = figma.createFrame();
+    temp.name = SPEC_PREFIX + "Section Rebuild [temp]";
+    temp.layoutMode = "VERTICAL";
+    temp.primaryAxisSizingMode = "AUTO";
+    temp.counterAxisSizingMode = "AUTO";
+    temp.fills = [];
+    temp.clipsContent = false;
+    figma.currentPage.appendChild(temp);
+    propagateResolvedVariableModes(temp, source);
+    try {
+      if (key === "hero") {
+        var hero = makeSectionWrapper(source.name);
+        hero.name = SPEC_PREFIX + "Hero Section";
+        hero.itemSpacing = 0;
+        temp.appendChild(hero);
+      } else if (key === "meta") {
+        temp.appendChild(makeMetaSection());
+      } else if (key === "anatomy") {
+        await buildAnatomySheetSection(temp, source);
+      } else if (key === "properties") {
+        await buildPropertiesSheetSection(temp, source, stateTarget);
+      } else if (key === "layout") {
+        await buildLayoutSheetSection(temp, source);
+      } else if (key === "variables") {
+        await buildVariablesSheetSection(temp, source);
+      }
+    } catch (e) {
+    }
+    var built = null;
+    if (temp.children.length > 0 && temp.children[0].type === "FRAME") {
+      built = temp.children[0];
+      try {
+        built.setPluginData("specSection", key);
+        built.setPluginData("sourceNodeId", source.id);
+      } catch (e) {
+      }
+      figma.currentPage.appendChild(built);
+      propagateResolvedVariableModes(built, source);
+    }
+    temp.remove();
+    return built;
+  }
+  async function resyncSheetInPlace(sheet, source) {
+    propagateResolvedVariableModes(sheet, source);
+    var stateTarget = await findStateTargetAsync(source);
+    var existing = [];
+    for (var i = 0; i < sheet.children.length; i++) {
+      var child = sheet.children[i];
+      if (child.type === "FRAME" && getSectionKey(child)) existing.push(child);
+    }
+    for (var j = 0; j < existing.length; j++) {
+      var oldSection = existing[j];
+      var key = getSectionKey(oldSection);
+      var index = sheet.children.indexOf(oldSection);
+      if (index < 0) continue;
+      var fresh = await buildSectionByKey(key, source, stateTarget);
+      if (!fresh) {
+        oldSection.remove();
+        continue;
+      }
+      sheet.insertChild(index, fresh);
+      oldSection.remove();
+      try {
+        fresh.layoutSizingHorizontal = "FILL";
+      } catch (e) {
+      }
+    }
+  }
+  async function resyncSectionInPlace(oldSection, source) {
+    var key = getSectionKey(oldSection);
+    var parent = oldSection.parent;
+    if (!key || !parent) return false;
+    var stateTarget = key === "properties" ? await findStateTargetAsync(source) : null;
+    var index = parent.children ? parent.children.indexOf(oldSection) : -1;
+    var oldX = oldSection.x;
+    var oldY = oldSection.y;
+    var oldW = oldSection.width || 1;
+    var oldSizingH = "";
+    try {
+      oldSizingH = oldSection.layoutSizingHorizontal || "";
+    } catch (e) {
+    }
+    var fresh = await buildSectionByKey(key, source, stateTarget);
+    if (!fresh) return false;
+    if (index >= 0 && typeof parent.insertChild === "function") {
+      parent.insertChild(Math.min(index, parent.children.length), fresh);
+    } else {
+      parent.appendChild(fresh);
+    }
+    oldSection.remove();
+    if (parent.layoutMode && parent.layoutMode !== "NONE") {
+      try {
+        fresh.layoutSizingHorizontal = oldSizingH === "FILL" ? "FILL" : "FIXED";
+      } catch (e) {
+      }
+      if (oldSizingH !== "FILL") {
+        try {
+          fresh.resizeWithoutConstraints(oldW, fresh.height || 1);
+        } catch (e) {
+        }
+      }
+    } else {
+      fresh.x = oldX;
+      fresh.y = oldY;
+      try {
+        fresh.resizeWithoutConstraints(oldW, fresh.height || 1);
+      } catch (e) {
+      }
+    }
+    return true;
+  }
+  function sheetHasStampedSections(sheet) {
+    for (var i = 0; i < sheet.children.length; i++) {
+      var child = sheet.children[i];
+      if (child.type === "FRAME" && getSectionKey(child)) return true;
+    }
+    return false;
   }
   async function getSelectionStateSummaryAsync() {
     var selection2 = figma.currentPage.selection;
@@ -3047,7 +3189,7 @@
     for (var i = 0; i < children.length; i++) {
       var child = children[i];
       if (child.type !== "FRAME") continue;
-      if (getSheetSourceId(child)) {
+      if (getSheetSourceId(child) && !getSectionKey(child)) {
         out.push(child);
         continue;
       }
@@ -3055,13 +3197,79 @@
         var inner = child.children || [];
         for (var r = 0; r < inner.length; r++) {
           var grand = inner[r];
-          if (grand.type === "FRAME" && getSheetSourceId(grand)) {
+          if (grand.type === "FRAME" && getSheetSourceId(grand) && !getSectionKey(grand)) {
             out.push(grand);
           }
         }
       }
     }
     return out;
+  }
+  function getSectionKey(n) {
+    try {
+      return n.getPluginData ? n.getPluginData("specSection") || "" : "";
+    } catch (e) {
+      return "";
+    }
+  }
+  function getEnclosingSpecSheet(n) {
+    var p = n.parent;
+    while (p && p.type !== "PAGE") {
+      if (p.type === "FRAME" && getSheetSourceId(p) && !getSectionKey(p)) return p;
+      p = p.parent;
+    }
+    return null;
+  }
+  function findAllStampedSections() {
+    var out = [];
+    try {
+      var frames = figma.currentPage.findAllWithCriteria({ types: ["FRAME"] });
+      for (var i = 0; i < frames.length; i++) {
+        var f = frames[i];
+        if (!f.name || f.name.indexOf(SPEC_PREFIX) !== 0) continue;
+        if (getSectionKey(f)) out.push(f);
+      }
+    } catch (e) {
+    }
+    return out;
+  }
+  function selectionCoversNode(n, selectedIds) {
+    var p = n;
+    while (p && p.type !== "PAGE") {
+      if (p.id && selectedIds[p.id]) return true;
+      p = p.parent;
+    }
+    return false;
+  }
+  function findResyncTargets() {
+    var sheets = findLinkedSheets();
+    var allSections = findAllStampedSections();
+    var selection2 = figma.currentPage.selection;
+    var sheetIds = {};
+    for (var s = 0; s < sheets.length; s++) sheetIds[sheets[s].id] = true;
+    var sections = [];
+    if (selection2.length === 0) {
+      for (var i = 0; i < allSections.length; i++) {
+        if (!getEnclosingSpecSheet(allSections[i])) sections.push(allSections[i]);
+      }
+      return { sheets, sections };
+    }
+    var selectedIds = {};
+    for (var si = 0; si < selection2.length; si++) selectedIds[selection2[si].id] = true;
+    var targetIds = collectSelectionTargetIds();
+    for (var j = 0; j < allSections.length; j++) {
+      var sec = allSections[j];
+      var enclosing = getEnclosingSpecSheet(sec);
+      if (enclosing && sheetIds[enclosing.id]) continue;
+      var covered = selectionCoversNode(sec, selectedIds);
+      var sourceMatched = !!targetIds[getSheetSourceId(sec)];
+      if (enclosing) {
+        if (covered) sections.push(sec);
+      } else if (covered || sourceMatched) {
+        sections.push(sec);
+      }
+    }
+    return { sheets, sections };
   }
   function collectSelectionTargetIds() {
     var ids = {};
@@ -3096,7 +3304,7 @@
     var seen = {};
     for (var s = 0; s < selection2.length; s++) {
       var sel = selection2[s];
-      if (sel.type === "FRAME" && getSheetSourceId(sel) && !seen[sel.id]) {
+      if (sel.type === "FRAME" && getSheetSourceId(sel) && !getSectionKey(sel) && !seen[sel.id]) {
         seen[sel.id] = true;
         linked.push(sel);
       }
@@ -3114,7 +3322,8 @@
   function postSelectionStateToUI() {
     var resyncableCount = 0;
     try {
-      resyncableCount = findLinkedSheets().length;
+      var targets = findResyncTargets();
+      resyncableCount = targets.sheets.length + targets.sections.length;
     } catch (e) {
       resyncableCount = 0;
     }
@@ -3298,8 +3507,8 @@
       (async function() {
         try {
           applyUiTokenOverrides(msg.tokens);
-          var linked = findLinkedSheets();
-          if (linked.length === 0) {
+          var targets = findResyncTargets();
+          if (targets.sheets.length === 0 && targets.sections.length === 0) {
             var noneMsg = figma.currentPage.selection.length === 0 ? "No spec sheets found on this page yet. Generate specs first." : "No spec sheets linked to this selection. Generate specs first.";
             figma.ui.postMessage({ type: "error", message: noneMsg });
             return;
@@ -3312,10 +3521,10 @@
             componentInstance: true,
             variables: true
           };
-          var jobs = [];
+          var sheetJobs = [];
           var orphans = 0;
-          for (var i = 0; i < linked.length; i++) {
-            var sheet = linked[i];
+          for (var i = 0; i < targets.sheets.length; i++) {
+            var sheet = targets.sheets[i];
             var source = await figma.getNodeByIdAsync(getSheetSourceId(sheet));
             if (!source || source.type !== "COMPONENT" && source.type !== "INSTANCE" && source.type !== "FRAME") {
               sheet.remove();
@@ -3328,40 +3537,64 @@
             } catch (e) {
               storedModules = null;
             }
-            jobs.push({ sheet, source, modules: storedModules || msg.modules || defaultModules });
+            sheetJobs.push({ sheet, source, modules: storedModules || msg.modules || defaultModules });
           }
-          if (jobs.length === 0) {
+          var sectionJobs = [];
+          var skippedSections = 0;
+          for (var si = 0; si < targets.sections.length; si++) {
+            var sec = targets.sections[si];
+            var secSource = await figma.getNodeByIdAsync(getSheetSourceId(sec));
+            if (!secSource || secSource.type !== "COMPONENT" && secSource.type !== "INSTANCE" && secSource.type !== "FRAME") {
+              skippedSections++;
+              continue;
+            }
+            sectionJobs.push({ section: sec, source: secSource });
+          }
+          if (sheetJobs.length === 0 && sectionJobs.length === 0) {
             figma.ui.postMessage({ type: "success", message: "Removed " + orphans + " orphaned sheet(s) \u2014 their components no longer exist." });
             postSelectionStateToUI();
             return;
           }
           var sources = [];
-          for (var s = 0; s < jobs.length; s++) sources.push(jobs[s].source);
+          for (var s = 0; s < sheetJobs.length; s++) sources.push(sheetJobs[s].source);
+          for (var s2 = 0; s2 < sectionJobs.length; s2++) sources.push(sectionJobs[s2].source);
           resolveLocalFonts(sources);
           await Promise.all([
             figma.loadFontAsync(FONT_REGULAR),
             figma.loadFontAsync(FONT_MEDIUM),
             figma.loadFontAsync(FONT_BOLD)
           ]);
-          var refreshed = 0;
-          for (var j = 0; j < jobs.length; j++) {
-            var job = jobs[j];
-            var parent = job.sheet.parent;
-            var index = parent && parent.children ? parent.children.indexOf(job.sheet) : -1;
-            var oldX = job.sheet.x;
-            var oldY = job.sheet.y;
-            var newSheet = await createReferenceStyleSpecSheetAsync(job.source, figma.currentPage, job.modules);
-            job.sheet.remove();
-            if (parent && parent.type !== "PAGE" && index >= 0 && !parent.removed) {
-              var insertAt = Math.min(index, parent.children.length);
-              parent.insertChild(insertAt, newSheet);
+          var refreshedSheets = 0;
+          for (var j = 0; j < sheetJobs.length; j++) {
+            var job = sheetJobs[j];
+            if (sheetHasStampedSections(job.sheet)) {
+              await resyncSheetInPlace(job.sheet, job.source);
             } else {
-              newSheet.x = oldX;
-              newSheet.y = oldY;
+              var parent = job.sheet.parent;
+              var index = parent && parent.children ? parent.children.indexOf(job.sheet) : -1;
+              var oldX = job.sheet.x;
+              var oldY = job.sheet.y;
+              var newSheet = await createReferenceStyleSpecSheetAsync(job.source, figma.currentPage, job.modules);
+              job.sheet.remove();
+              if (parent && parent.type !== "PAGE" && index >= 0 && !parent.removed) {
+                var insertAt = Math.min(index, parent.children.length);
+                parent.insertChild(insertAt, newSheet);
+              } else {
+                newSheet.x = oldX;
+                newSheet.y = oldY;
+              }
             }
-            refreshed++;
+            refreshedSheets++;
           }
-          var summaryText = "Resynced " + refreshed + " spec sheet(s)" + (orphans > 0 ? ", removed " + orphans + " orphaned" : "") + ".";
+          var refreshedSections = 0;
+          for (var k = 0; k < sectionJobs.length; k++) {
+            var ok = await resyncSectionInPlace(sectionJobs[k].section, sectionJobs[k].source);
+            if (ok) refreshedSections++;
+          }
+          var parts = [];
+          if (refreshedSheets > 0) parts.push(refreshedSheets + " sheet(s)");
+          if (refreshedSections > 0) parts.push(refreshedSections + " moved section(s)");
+          var summaryText = "Resynced " + (parts.length > 0 ? parts.join(" and ") : "nothing") + (orphans > 0 ? ", removed " + orphans + " orphaned" : "") + (skippedSections > 0 ? ", skipped " + skippedSections + " section(s) with missing components" : "") + ".";
           figma.ui.postMessage({ type: "success", message: summaryText });
           postSelectionStateToUI();
         } catch (err) {

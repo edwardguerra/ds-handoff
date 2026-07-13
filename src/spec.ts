@@ -5123,6 +5123,21 @@ function propagateResolvedVariableModes(sheet: FrameNode, sourceNode: SceneNode)
   }
 }
 
+// Stamps every child appended to `sheet` since `startIndex` as a section of
+// kind `key`, linked to `sourceId`. Sections carry their own identity so
+// resync can find and rebuild each one individually — including after the
+// user moves a section out of the sheet into some other frame.
+function stampSectionsFrom(sheet: FrameNode, startIndex: number, key: string, sourceId: string): void {
+  for (var i = startIndex; i < sheet.children.length; i++) {
+    var child = sheet.children[i] as any;
+    if (!child || child.type !== 'FRAME') continue;
+    try {
+      child.setPluginData('specSection', key);
+      child.setPluginData('sourceNodeId', sourceId);
+    } catch (e) {}
+  }
+}
+
 async function createReferenceStyleSpecSheetAsync(node: SceneNode, page: PageNode, modules: any): Promise<FrameNode> {
   var b = getNodeBounds(node);
   var stateTarget = await findStateTargetAsync(node);
@@ -5142,24 +5157,37 @@ async function createReferenceStyleSpecSheetAsync(node: SceneNode, page: PageNod
   sheet.clipsContent = false;
   sheet.fills = solidPaint(COLOR_PAGE_BG);
 
+  var mark = sheet.children.length;
   var hero = makeSectionWrapper(node.name);
   hero.name = SPEC_PREFIX + 'Hero Section';
   hero.itemSpacing = 0;
   sheet.appendChild(hero);
+  stampSectionsFrom(sheet, mark, 'hero', node.id);
+
+  mark = sheet.children.length;
   sheet.appendChild(makeMetaSection());
+  stampSectionsFrom(sheet, mark, 'meta', node.id);
 
   if (modules.anatomy) {
+    mark = sheet.children.length;
     await buildAnatomySheetSection(sheet, node);
+    stampSectionsFrom(sheet, mark, 'anatomy', node.id);
   }
 
+  mark = sheet.children.length;
   await buildPropertiesSheetSection(sheet, node, stateTarget);
+  stampSectionsFrom(sheet, mark, 'properties', node.id);
 
   if (modules.spacing || modules.dimensions) {
+    mark = sheet.children.length;
     await buildLayoutSheetSection(sheet, node);
+    stampSectionsFrom(sheet, mark, 'layout', node.id);
   }
 
   if (modules.variables) {
+    mark = sheet.children.length;
     await buildVariablesSheetSection(sheet, node);
+    stampSectionsFrom(sheet, mark, 'variables', node.id);
   }
 
   finalizeSheetWidth(sheet);
@@ -5170,6 +5198,136 @@ async function createReferenceStyleSpecSheetAsync(node: SceneNode, page: PageNod
   sheet.setPluginData('sourceNodeId', node.id);
   sheet.setPluginData('specModules', JSON.stringify(modules || {}));
   return sheet;
+}
+
+// Builds ONE section of the given kind into a temporary container and
+// returns it detached (parked at page level; caller inserts it where the
+// old section lived). Returns null when the builder produced nothing
+// (e.g. properties when the source no longer has any).
+async function buildSectionByKey(key: string, source: SceneNode, stateTarget: StateTargetInfo | null): Promise<FrameNode | null> {
+  var temp = figma.createFrame();
+  temp.name = SPEC_PREFIX + 'Section Rebuild [temp]';
+  temp.layoutMode = 'VERTICAL';
+  temp.primaryAxisSizingMode = 'AUTO';
+  temp.counterAxisSizingMode = 'AUTO';
+  temp.fills = [];
+  temp.clipsContent = false;
+  figma.currentPage.appendChild(temp);
+  propagateResolvedVariableModes(temp, source);
+
+  try {
+    if (key === 'hero') {
+      var hero = makeSectionWrapper(source.name);
+      hero.name = SPEC_PREFIX + 'Hero Section';
+      hero.itemSpacing = 0;
+      temp.appendChild(hero);
+    } else if (key === 'meta') {
+      temp.appendChild(makeMetaSection());
+    } else if (key === 'anatomy') {
+      await buildAnatomySheetSection(temp, source);
+    } else if (key === 'properties') {
+      await buildPropertiesSheetSection(temp, source, stateTarget);
+    } else if (key === 'layout') {
+      await buildLayoutSheetSection(temp, source);
+    } else if (key === 'variables') {
+      await buildVariablesSheetSection(temp, source);
+    }
+  } catch (e) {}
+
+  var built: FrameNode | null = null;
+  if (temp.children.length > 0 && temp.children[0].type === 'FRAME') {
+    built = temp.children[0] as FrameNode;
+    try {
+      built.setPluginData('specSection', key);
+      built.setPluginData('sourceNodeId', source.id);
+    } catch (e) {}
+    figma.currentPage.appendChild(built); // detach before removing temp
+    propagateResolvedVariableModes(built, source);
+  }
+  temp.remove();
+  return built;
+}
+
+// Rebuilds each stamped section of `sheet` in place. The sheet frame itself
+// is untouched — its canvas position AND its width are preserved (a width
+// differing from the generated default is an intentional user choice).
+// Sections the user moved out or deleted are simply absent here and are
+// NOT re-created (moved-out ones sync separately, where they now live).
+async function resyncSheetInPlace(sheet: FrameNode, source: SceneNode): Promise<void> {
+  propagateResolvedVariableModes(sheet, source);
+  var stateTarget = await findStateTargetAsync(source);
+
+  var existing: FrameNode[] = [];
+  for (var i = 0; i < sheet.children.length; i++) {
+    var child = sheet.children[i] as any;
+    if (child.type === 'FRAME' && getSectionKey(child)) existing.push(child as FrameNode);
+  }
+
+  for (var j = 0; j < existing.length; j++) {
+    var oldSection = existing[j];
+    var key = getSectionKey(oldSection);
+    var index = sheet.children.indexOf(oldSection);
+    if (index < 0) continue;
+
+    var fresh = await buildSectionByKey(key, source, stateTarget);
+    if (!fresh) {
+      oldSection.remove(); // source genuinely has nothing for this section anymore
+      continue;
+    }
+    sheet.insertChild(index, fresh);
+    oldSection.remove();
+    try { (fresh as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
+  }
+}
+
+// Rebuilds one section that lives outside the sheet (or inside a sheet the
+// user targeted directly), keeping its current parent, stacking order,
+// position, and width — the section stays exactly where the user put it.
+async function resyncSectionInPlace(oldSection: FrameNode, source: SceneNode): Promise<boolean> {
+  var key = getSectionKey(oldSection);
+  var parent = oldSection.parent as any;
+  if (!key || !parent) return false;
+
+  var stateTarget = key === 'properties' ? await findStateTargetAsync(source) : null;
+  var index = parent.children ? parent.children.indexOf(oldSection) : -1;
+  var oldX = oldSection.x;
+  var oldY = oldSection.y;
+  var oldW = oldSection.width || 1;
+  var oldSizingH = '';
+  try { oldSizingH = (oldSection as any).layoutSizingHorizontal || ''; } catch (e) {}
+
+  var fresh = await buildSectionByKey(key, source, stateTarget);
+  if (!fresh) return false; // keep the old one rather than silently deleting it
+
+  if (index >= 0 && typeof parent.insertChild === 'function') {
+    parent.insertChild(Math.min(index, parent.children.length), fresh);
+  } else {
+    parent.appendChild(fresh);
+  }
+  oldSection.remove();
+
+  if (parent.layoutMode && parent.layoutMode !== 'NONE') {
+    // Auto-layout parent: mirror how the old section sat in the flow.
+    try {
+      (fresh as any).layoutSizingHorizontal = oldSizingH === 'FILL' ? 'FILL' : 'FIXED';
+    } catch (e) {}
+    if (oldSizingH !== 'FILL') {
+      try { fresh.resizeWithoutConstraints(oldW, fresh.height || 1); } catch (e) {}
+    }
+  } else {
+    fresh.x = oldX;
+    fresh.y = oldY;
+    try { fresh.resizeWithoutConstraints(oldW, fresh.height || 1); } catch (e) {}
+  }
+  return true;
+}
+
+function sheetHasStampedSections(sheet: FrameNode): boolean {
+  for (var i = 0; i < sheet.children.length; i++) {
+    var child = sheet.children[i] as any;
+    if (child.type === 'FRAME' && getSectionKey(child)) return true;
+  }
+  return false;
 }
 
 async function getSelectionStateSummaryAsync(): Promise<{ hasStateTarget: boolean; targetName: string; states: string[]; message: string }> {
@@ -5223,7 +5381,10 @@ function getAllSpecSheets(): FrameNode[] {
   for (var i = 0; i < children.length; i++) {
     var child = children[i] as any;
     if (child.type !== 'FRAME') continue;
-    if (getSheetSourceId(child)) {
+    // A moved-out *section* also carries sourceNodeId but has a specSection
+    // key — it must not be mistaken for a whole sheet, or resync would
+    // delete it and regenerate a full sheet in its place.
+    if (getSheetSourceId(child) && !getSectionKey(child)) {
       out.push(child as FrameNode);
       continue;
     }
@@ -5231,13 +5392,100 @@ function getAllSpecSheets(): FrameNode[] {
       var inner = child.children || [];
       for (var r = 0; r < inner.length; r++) {
         var grand = inner[r] as any;
-        if (grand.type === 'FRAME' && getSheetSourceId(grand)) {
+        if (grand.type === 'FRAME' && getSheetSourceId(grand) && !getSectionKey(grand)) {
           out.push(grand as FrameNode);
         }
       }
     }
   }
   return out;
+}
+
+function getSectionKey(n: BaseNode): string {
+  try {
+    return (n as any).getPluginData ? (n as any).getPluginData('specSection') || '' : '';
+  } catch (e) {
+    return '';
+  }
+}
+
+// Nearest ancestor that is a spec sheet (sourceNodeId without a section
+// key), or null when the node lives outside any sheet.
+function getEnclosingSpecSheet(n: BaseNode): FrameNode | null {
+  var p = (n as any).parent;
+  while (p && p.type !== 'PAGE') {
+    if (p.type === 'FRAME' && getSheetSourceId(p) && !getSectionKey(p)) return p as FrameNode;
+    p = p.parent;
+  }
+  return null;
+}
+
+// Every stamped section on the page, wherever it lives. Name prefix first
+// (cheap) so getPluginData only runs on plugin-produced frames.
+function findAllStampedSections(): FrameNode[] {
+  var out: FrameNode[] = [];
+  try {
+    var frames = figma.currentPage.findAllWithCriteria({ types: ['FRAME'] }) as any[];
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i];
+      if (!f.name || f.name.indexOf(SPEC_PREFIX) !== 0) continue;
+      if (getSectionKey(f)) out.push(f as FrameNode);
+    }
+  } catch (e) {}
+  return out;
+}
+
+function selectionCoversNode(n: BaseNode, selectedIds: { [id: string]: boolean }): boolean {
+  var p: any = n;
+  while (p && p.type !== 'PAGE') {
+    if (p.id && selectedIds[p.id]) return true;
+    p = p.parent;
+  }
+  return false;
+}
+
+// What resync should touch: whole sheets (rebuilt section-by-section in
+// place) plus individual sections that live OUTSIDE any sheet — the user
+// moved them into their own frames and they sync there (never re-created
+// back inside the sheet). Sections inside a targeted sheet are covered by
+// the sheet's own in-place rebuild and excluded here to avoid double work.
+function findResyncTargets(): { sheets: FrameNode[]; sections: FrameNode[] } {
+  var sheets = findLinkedSheets();
+  var allSections = findAllStampedSections();
+  var selection = figma.currentPage.selection;
+
+  var sheetIds: { [id: string]: boolean } = {};
+  for (var s = 0; s < sheets.length; s++) sheetIds[sheets[s].id] = true;
+
+  var sections: FrameNode[] = [];
+
+  if (selection.length === 0) {
+    for (var i = 0; i < allSections.length; i++) {
+      if (!getEnclosingSpecSheet(allSections[i])) sections.push(allSections[i]);
+    }
+    return { sheets: sheets, sections: sections };
+  }
+
+  var selectedIds: { [id: string]: boolean } = {};
+  for (var si = 0; si < selection.length; si++) selectedIds[selection[si].id] = true;
+  var targetIds = collectSelectionTargetIds();
+
+  for (var j = 0; j < allSections.length; j++) {
+    var sec = allSections[j];
+    var enclosing = getEnclosingSpecSheet(sec);
+    if (enclosing && sheetIds[enclosing.id]) continue; // sheet rebuild covers it
+    var covered = selectionCoversNode(sec, selectedIds);
+    var sourceMatched = !!targetIds[getSheetSourceId(sec)];
+    if (enclosing) {
+      // Inside a sheet that is NOT being resynced: only when explicitly
+      // selected (directly or via a selected ancestor).
+      if (covered) sections.push(sec);
+    } else if (covered || sourceMatched) {
+      sections.push(sec);
+    }
+  }
+
+  return { sheets: sheets, sections: sections };
 }
 
 function collectSelectionTargetIds(): { [id: string]: boolean } {
@@ -5293,7 +5541,7 @@ function findLinkedSheets(): FrameNode[] {
   // any source-matching.
   for (var s = 0; s < selection.length; s++) {
     var sel = selection[s] as any;
-    if (sel.type === 'FRAME' && getSheetSourceId(sel) && !seen[sel.id]) {
+    if (sel.type === 'FRAME' && getSheetSourceId(sel) && !getSectionKey(sel) && !seen[sel.id]) {
       seen[sel.id] = true;
       linked.push(sel as FrameNode);
     }
@@ -5316,7 +5564,8 @@ function findLinkedSheets(): FrameNode[] {
 function postSelectionStateToUI(): void {
   var resyncableCount = 0;
   try {
-    resyncableCount = findLinkedSheets().length;
+    var targets = findResyncTargets();
+    resyncableCount = targets.sheets.length + targets.sections.length;
   } catch (e) {
     resyncableCount = 0;
   }
@@ -5538,8 +5787,8 @@ export function handleSpecMessage(msg: any): void {
       try {
         applyUiTokenOverrides(msg.tokens);
 
-        var linked = findLinkedSheets();
-        if (linked.length === 0) {
+        var targets = findResyncTargets();
+        if (targets.sheets.length === 0 && targets.sections.length === 0) {
           var noneMsg = figma.currentPage.selection.length === 0
             ? 'No spec sheets found on this page yet. Generate specs first.'
             : 'No spec sheets linked to this selection. Generate specs first.';
@@ -5552,10 +5801,13 @@ export function handleSpecMessage(msg: any): void {
           styles: true, componentInstance: true, variables: true
         };
 
-        var jobs: { sheet: FrameNode; source: SceneNode; modules: any }[] = [];
+        // Resolve sources up front; drop orphaned sheets, skip orphaned
+        // moved-out sections (they live inside the user's own frames —
+        // deleting there is not this plugin's call).
+        var sheetJobs: { sheet: FrameNode; source: SceneNode; modules: any }[] = [];
         var orphans = 0;
-        for (var i = 0; i < linked.length; i++) {
-          var sheet = linked[i];
+        for (var i = 0; i < targets.sheets.length; i++) {
+          var sheet = targets.sheets[i];
           var source = await figma.getNodeByIdAsync(getSheetSourceId(sheet));
           if (!source || (source.type !== 'COMPONENT' && source.type !== 'INSTANCE' && source.type !== 'FRAME')) {
             sheet.remove();
@@ -5568,17 +5820,30 @@ export function handleSpecMessage(msg: any): void {
           } catch (e) {
             storedModules = null;
           }
-          jobs.push({ sheet: sheet, source: source as SceneNode, modules: storedModules || msg.modules || defaultModules });
+          sheetJobs.push({ sheet: sheet, source: source as SceneNode, modules: storedModules || msg.modules || defaultModules });
         }
 
-        if (jobs.length === 0) {
+        var sectionJobs: { section: FrameNode; source: SceneNode }[] = [];
+        var skippedSections = 0;
+        for (var si = 0; si < targets.sections.length; si++) {
+          var sec = targets.sections[si];
+          var secSource = await figma.getNodeByIdAsync(getSheetSourceId(sec));
+          if (!secSource || (secSource.type !== 'COMPONENT' && secSource.type !== 'INSTANCE' && secSource.type !== 'FRAME')) {
+            skippedSections++;
+            continue;
+          }
+          sectionJobs.push({ section: sec, source: secSource as SceneNode });
+        }
+
+        if (sheetJobs.length === 0 && sectionJobs.length === 0) {
           figma.ui.postMessage({ type: 'success', message: 'Removed ' + orphans + ' orphaned sheet(s) — their components no longer exist.' });
           postSelectionStateToUI();
           return;
         }
 
         var sources: SceneNode[] = [];
-        for (var s = 0; s < jobs.length; s++) sources.push(jobs[s].source);
+        for (var s = 0; s < sheetJobs.length; s++) sources.push(sheetJobs[s].source);
+        for (var s2 = 0; s2 < sectionJobs.length; s2++) sources.push(sectionJobs[s2].source);
         resolveLocalFonts(sources);
         await Promise.all([
           figma.loadFontAsync(FONT_REGULAR),
@@ -5586,30 +5851,49 @@ export function handleSpecMessage(msg: any): void {
           figma.loadFontAsync(FONT_BOLD)
         ]);
 
-        var refreshed = 0;
-        for (var j = 0; j < jobs.length; j++) {
-          var job = jobs[j];
-          var parent = job.sheet.parent as any;
-          var index = parent && parent.children ? parent.children.indexOf(job.sheet) : -1;
-          var oldX = job.sheet.x;
-          var oldY = job.sheet.y;
-
-          var newSheet = await createReferenceStyleSpecSheetAsync(job.source, figma.currentPage, job.modules);
-          job.sheet.remove();
-
-          if (parent && parent.type !== 'PAGE' && index >= 0 && !(parent as any).removed) {
-            // Sheet lived in the auto-layout row — put the new one back at the same slot.
-            var insertAt = Math.min(index, parent.children.length);
-            parent.insertChild(insertAt, newSheet);
+        var refreshedSheets = 0;
+        for (var j = 0; j < sheetJobs.length; j++) {
+          var job = sheetJobs[j];
+          if (sheetHasStampedSections(job.sheet)) {
+            // Section-level sync in place: the sheet frame is never
+            // replaced, so its position and any user-adjusted width stay
+            // exactly as they are, and sections moved out of the sheet
+            // are not re-created inside it.
+            await resyncSheetInPlace(job.sheet, job.source);
           } else {
-            // Loose sheet — keep its old canvas position.
-            newSheet.x = oldX;
-            newSheet.y = oldY;
+            // Legacy sheet from before sections carried their own stamps —
+            // full rebuild is the only option, restoring position as before.
+            var parent = job.sheet.parent as any;
+            var index = parent && parent.children ? parent.children.indexOf(job.sheet) : -1;
+            var oldX = job.sheet.x;
+            var oldY = job.sheet.y;
+
+            var newSheet = await createReferenceStyleSpecSheetAsync(job.source, figma.currentPage, job.modules);
+            job.sheet.remove();
+
+            if (parent && parent.type !== 'PAGE' && index >= 0 && !(parent as any).removed) {
+              var insertAt = Math.min(index, parent.children.length);
+              parent.insertChild(insertAt, newSheet);
+            } else {
+              newSheet.x = oldX;
+              newSheet.y = oldY;
+            }
           }
-          refreshed++;
+          refreshedSheets++;
         }
 
-        var summaryText = 'Resynced ' + refreshed + ' spec sheet(s)' + (orphans > 0 ? ', removed ' + orphans + ' orphaned' : '') + '.';
+        var refreshedSections = 0;
+        for (var k = 0; k < sectionJobs.length; k++) {
+          var ok = await resyncSectionInPlace(sectionJobs[k].section, sectionJobs[k].source);
+          if (ok) refreshedSections++;
+        }
+
+        var parts: string[] = [];
+        if (refreshedSheets > 0) parts.push(refreshedSheets + ' sheet(s)');
+        if (refreshedSections > 0) parts.push(refreshedSections + ' moved section(s)');
+        var summaryText = 'Resynced ' + (parts.length > 0 ? parts.join(' and ') : 'nothing') +
+          (orphans > 0 ? ', removed ' + orphans + ' orphaned' : '') +
+          (skippedSections > 0 ? ', skipped ' + skippedSections + ' section(s) with missing components' : '') + '.';
         figma.ui.postMessage({ type: 'success', message: summaryText });
         postSelectionStateToUI();
       } catch (err: any) {
