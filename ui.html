@@ -704,10 +704,16 @@
       var stateInfo = document.getElementById('state-info');
       var resyncBtn = document.getElementById('resync');
 
-      function syncResyncButton(count) {
+      function syncResyncButton(count, isBatch) {
         if (count > 0) {
           resyncBtn.classList.add('visible');
-          resyncBtn.textContent = count > 1 ? 'Resync (' + count + ')' : 'Resync';
+          if (isBatch) {
+            resyncBtn.textContent = count > 1 ? 'Resync All (' + count + ')' : 'Resync';
+            resyncBtn.title = 'Nothing selected — regenerate every previously generated sheet on this page';
+          } else {
+            resyncBtn.textContent = count > 1 ? 'Resync (' + count + ')' : 'Resync';
+            resyncBtn.title = 'Regenerate the spec sheet(s) linked to this selection';
+          }
         } else {
           resyncBtn.classList.remove('visible');
         }
@@ -830,7 +836,7 @@
       function handleSpecUiMessage(msg) {
         if (msg.type === 'selection-state') {
           syncSelectionState(msg.selection || null);
-          syncResyncButton(msg.resyncableCount || 0);
+          syncResyncButton(msg.resyncableCount || 0, !!msg.resyncIsBatch);
         }
         if (msg.type === 'success')
           showStatus(msg.message, 'success');

@@ -5120,13 +5120,42 @@ function collectSelectionTargetIds(): { [id: string]: boolean } {
 }
 
 function findLinkedSheets(): FrameNode[] {
-  var targetIds = collectSelectionTargetIds();
+  var selection = figma.currentPage.selection;
   var sheets = getAllSpecSheets();
+
+  // Nothing selected: once specs are generated you shouldn't have to go
+  // re-find the exact source node just to keep them in sync — resync
+  // everything already generated on this page. Each sheet already carries
+  // its own sourceNodeId in pluginData, so no selection is needed at all.
+  if (selection.length === 0) {
+    return sheets;
+  }
+
   var linked: FrameNode[] = [];
+  var seen: { [id: string]: boolean } = {};
+
+  // A generated sheet selected directly resyncs just itself — the sheet
+  // already has everything it needs (sourceNodeId + specModules) without
+  // any source-matching.
+  for (var s = 0; s < selection.length; s++) {
+    var sel = selection[s] as any;
+    if (sel.type === 'FRAME' && getSheetSourceId(sel) && !seen[sel.id]) {
+      seen[sel.id] = true;
+      linked.push(sel as FrameNode);
+    }
+  }
+
+  // Otherwise fall back to source-matching (exact source, an ancestor
+  // wrapping it, or something nested inside it).
+  var targetIds = collectSelectionTargetIds();
   for (var i = 0; i < sheets.length; i++) {
     var srcId = getSheetSourceId(sheets[i]);
-    if (srcId && targetIds[srcId]) linked.push(sheets[i]);
+    if (srcId && targetIds[srcId] && !seen[sheets[i].id]) {
+      seen[sheets[i].id] = true;
+      linked.push(sheets[i]);
+    }
   }
+
   return linked;
 }
 
@@ -5137,10 +5166,11 @@ function postSelectionStateToUI(): void {
   } catch (e) {
     resyncableCount = 0;
   }
+  var resyncIsBatch = figma.currentPage.selection.length === 0;
   getSelectionStateSummaryAsync().then(function(summary) {
-    figma.ui.postMessage({ type: 'selection-state', selection: summary, resyncableCount: resyncableCount });
+    figma.ui.postMessage({ type: 'selection-state', selection: summary, resyncableCount: resyncableCount, resyncIsBatch: resyncIsBatch });
   }).catch(function() {
-    figma.ui.postMessage({ type: 'selection-state', selection: NO_STATE_SUMMARY, resyncableCount: resyncableCount });
+    figma.ui.postMessage({ type: 'selection-state', selection: NO_STATE_SUMMARY, resyncableCount: resyncableCount, resyncIsBatch: resyncIsBatch });
   });
 }
 
@@ -5356,7 +5386,10 @@ export function handleSpecMessage(msg: any): void {
 
         var linked = findLinkedSheets();
         if (linked.length === 0) {
-          figma.ui.postMessage({ type: 'error', message: 'No spec sheets linked to this selection. Generate specs first.' });
+          var noneMsg = figma.currentPage.selection.length === 0
+            ? 'No spec sheets found on this page yet. Generate specs first.'
+            : 'No spec sheets linked to this selection. Generate specs first.';
+          figma.ui.postMessage({ type: 'error', message: noneMsg });
           return;
         }
 

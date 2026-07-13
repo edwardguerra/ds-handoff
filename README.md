@@ -16,7 +16,10 @@ One window (`ui.html`) with a **Component | Tokens** toggle:
 
 Both resync flows follow the same pattern: the generated frame is stamped with `pluginData` (source node id + module selection for Component; a doc marker + collection/style ids for Tokens) so it can be found and regenerated without depending on canvas selection.
 
-Resync's selection matching is bidirectional: selecting the exact node specs were generated from, an ancestor frame that wraps it, or a descendant nested inside it (down to any depth, including nested frames) all resolve to the same linked sheet.
+Resync doesn't require re-finding the exact source node. Any of these select and trigger it:
+- The exact node specs were generated from, an ancestor frame wrapping it, or anything nested inside it (any depth, including nested frames).
+- The generated sheet itself, selected directly — it already carries its own source id in `pluginData`.
+- **Nothing** — with an empty selection, Resync regenerates every stamped sheet on the page ("Resync All (N)"). Generate once, and every later resync is a single click with no reselecting.
 
 Clicking `DS Handoff` in the Plugins menu always opens the unified UI directly on the Component tab — switch to Tokens with the in-app toggle. The only `figma.command` routing left is for contextual relaunch buttons:
 
