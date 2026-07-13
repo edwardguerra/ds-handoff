@@ -16,12 +16,12 @@ One window (`ui.html`) with a **Component | Tokens** toggle:
 
 Both resync flows follow the same pattern: the generated frame is stamped with `pluginData` (source node id + module selection for Component; a doc marker + collection/style ids for Tokens) so it can be found and regenerated without depending on canvas selection.
 
-Launch routing via `figma.command` (`Plugins → DS Handoff` submenu):
+Resync's selection matching is bidirectional: selecting the exact node specs were generated from, an ancestor frame that wraps it, or a descendant nested inside it (down to any depth, including nested frames) all resolve to the same linked sheet.
+
+Clicking `DS Handoff` in the Plugins menu always opens the unified UI directly on the Component tab — switch to Tokens with the in-app toggle. The only `figma.command` routing left is for contextual relaunch buttons:
 
 | Entry point | Opens |
 |---|---|
-| Component Spec (menu) | Component tab |
-| Variables (menu) | Tokens tab |
 | "Refresh variables" relaunch button | Tokens tab (`rewrite` flow) |
 | "Wrap in auto layout" relaunch button | headless, no UI |
 

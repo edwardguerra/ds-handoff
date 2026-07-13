@@ -1839,6 +1839,13 @@
       var grid = createPropertyGroupGrid(816);
       grid.name = SPEC_PREFIX + "Property Cards " + groupName;
       grid.gridRowCount = Math.max(1, Math.ceil(cards2.length / 2));
+      var isSingleCard = cards2.length === 1;
+      if (isSingleCard) {
+        try {
+          grid.gridColumnCount = 1;
+        } catch (e) {
+        }
+      }
       var contextualByCard = [];
       var allowedVariantRefBaseKeys = void 0;
       if (cards2.length > 1 && cards2[0].propertyType === "VARIANT") {
@@ -1895,9 +1902,11 @@
         }
       }
       section.appendChild(grid);
-      try {
-        grid.layoutSizingHorizontal = "FILL";
-      } catch (e) {
+      if (!isSingleCard) {
+        try {
+          grid.layoutSizingHorizontal = "FILL";
+        } catch (e) {
+        }
       }
     }
     for (var s = 0; s < stateVariantGroups.length; s++) {
@@ -2961,10 +2970,15 @@
       if (node.name && node.name.indexOf(SPEC_PREFIX) === 0) continue;
       ids[node.id] = true;
       if (typeof node.findAllWithCriteria === "function") {
-        var nested = node.findAllWithCriteria({ types: ["COMPONENT", "INSTANCE"] });
+        var nested = node.findAllWithCriteria({ types: ["COMPONENT", "INSTANCE", "FRAME"] });
         for (var n = 0; n < nested.length; n++) {
           ids[nested[n].id] = true;
         }
+      }
+      var ancestor = node.parent;
+      while (ancestor && ancestor.type !== "PAGE") {
+        if (ancestor.id) ids[ancestor.id] = true;
+        ancestor = ancestor.parent;
       }
     }
     return ids;

@@ -3723,6 +3723,14 @@ async function buildPropertiesSheetSection(parent: FrameNode, node: SceneNode, s
     grid.name = SPEC_PREFIX + 'Property Cards ' + groupName;
     grid.gridRowCount = Math.max(1, Math.ceil(cards.length / 2));
 
+    // A single card doesn't need a second grid column — leaving it in place
+    // forces the row to stretch to the sheet's full width, leaving a
+    // permanently empty column next to the one real card.
+    var isSingleCard = cards.length === 1;
+    if (isSingleCard) {
+      try { grid.gridColumnCount = 1; } catch (e) {}
+    }
+
     var contextualByCard: PropertyVariableRef[][] = [];
     var allowedVariantRefBaseKeys: { [key: string]: boolean } | undefined = undefined;
 
@@ -3787,9 +3795,11 @@ async function buildPropertiesSheetSection(parent: FrameNode, node: SceneNode, s
 
       section.appendChild(grid);
 
-      try {
-        (grid as any).layoutSizingHorizontal = 'FILL';
-      } catch (e) {}
+      if (!isSingleCard) {
+        try {
+          (grid as any).layoutSizingHorizontal = 'FILL';
+        } catch (e) {}
+      }
   }
 
   for (var s = 0; s < stateVariantGroups.length; s++) {
@@ -5085,11 +5095,25 @@ function collectSelectionTargetIds(): { [id: string]: boolean } {
     if (getSheetSourceId(node)) continue; // selected a generated sheet, not a source
     if (node.name && node.name.indexOf(SPEC_PREFIX) === 0) continue;
     ids[node.id] = true;
+
+    // Descendants: a selected frame may wrap the node specs were actually
+    // generated from — search the whole subtree, not just component/instance
+    // leaves, since the source can itself be a FRAME (e.g. a card or row).
     if (typeof node.findAllWithCriteria === 'function') {
-      var nested = node.findAllWithCriteria({ types: ['COMPONENT', 'INSTANCE'] });
+      var nested = node.findAllWithCriteria({ types: ['COMPONENT', 'INSTANCE', 'FRAME'] });
       for (var n = 0; n < nested.length; n++) {
         ids[nested[n].id] = true;
       }
+    }
+
+    // Ancestors: the user may instead select something nested INSIDE the
+    // node specs were generated from (e.g. the instance itself, when specs
+    // were generated against its parent frame) — walk up so that still
+    // resolves to the same linked sheet.
+    var ancestor = node.parent as any;
+    while (ancestor && ancestor.type !== 'PAGE') {
+      if (ancestor.id) ids[ancestor.id] = true;
+      ancestor = ancestor.parent;
     }
   }
   return ids;
