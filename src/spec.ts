@@ -3097,14 +3097,16 @@ async function makeStateCard(
   stateTarget: PropertyPreviewTarget,
   spec: PropertyCardSpec,
   precomputedContextualRefs?: PropertyVariableRef[],
-  allowedVariantRefBaseKeys?: { [key: string]: boolean }
+  allowedVariantRefBaseKeys?: { [key: string]: boolean },
+  cardWidth?: number
 ): Promise<FrameNode> {
-  var card = makeVerticalAutoFrame(PROPERTIES_CARD_WIDTH);
+  var width = cardWidth || PROPERTIES_CARD_WIDTH;
+  var card = makeVerticalAutoFrame(width);
   card.name = SPEC_PREFIX + title + ' Property';
   card.itemSpacing = 10;
   card.fills = [];
 
-  var preview = makeLightPreviewPanel(PROPERTIES_CARD_WIDTH, 150);
+  var preview = makeLightPreviewPanel(width, 150);
   preview.name = SPEC_PREFIX + title + ' Preview';
   var previewResult = await buildStatePreviewNode(node, preview, stateTarget, spec.propertyKey, spec.value);
 
@@ -3156,7 +3158,7 @@ async function makeStateCard(
   }
 
   try {
-    card.resizeWithoutConstraints(PROPERTIES_CARD_WIDTH, card.height || 1);
+    card.resizeWithoutConstraints(width, card.height || 1);
   } catch (e) {}
   return card;
 }
@@ -3302,7 +3304,8 @@ async function createPropertyCardsForDefinition(
   return cards;
 }
 
-function createPropertyGroupGrid(maxWidth?: number): FrameNode {
+function createPropertyGroupGrid(columnWidth?: number): FrameNode {
+  var width = columnWidth || PROPERTIES_CARD_WIDTH;
   var grid = figma.createFrame();
   grid.layoutMode = 'GRID';
   grid.gridColumnCount = 2;
@@ -3313,14 +3316,14 @@ function createPropertyGroupGrid(maxWidth?: number): FrameNode {
   (grid as any).layoutSizingHorizontal = 'HUG';
   (grid as any).layoutSizingVertical = 'HUG';
   grid.fills = [];
-  
+
   try {
     grid.gridColumnSizes[0].type = 'FIXED';
-    grid.gridColumnSizes[0].value = PROPERTIES_CARD_WIDTH;
+    grid.gridColumnSizes[0].value = width;
     grid.gridColumnSizes[1].type = 'FIXED';
-    grid.gridColumnSizes[1].value = PROPERTIES_CARD_WIDTH;
+    grid.gridColumnSizes[1].value = width;
   } catch (e) {}
-  
+
   return grid;
 }
 
@@ -3719,14 +3722,24 @@ async function buildPropertiesSheetSection(parent: FrameNode, node: SceneNode, s
     hasAnyCards = true;
     section.appendChild(makeText(groupName, 36, FONT_BOLD, COLOR_HEADER));
 
-    var grid = createPropertyGroupGrid(816);
+    // Derive card width from SHEET_INNER_WIDTH — the same "one true width"
+    // Anatomy and Variables already build against — instead of the old
+    // independent PROPERTIES_CARD_WIDTH constant, so a single card fills its
+    // full available row instead of leaving an empty second column, and a
+    // pair of cards fills the row edge-to-edge instead of floating narrower
+    // than the section around them.
+    var isSingleCard = cards.length === 1;
+    var groupInnerWidth = SHEET_INNER_WIDTH - 48;
+    var groupGap = 24;
+    var cardWidth = isSingleCard ? groupInnerWidth : Math.floor((groupInnerWidth - groupGap) / 2);
+
+    var grid = createPropertyGroupGrid(cardWidth);
     grid.name = SPEC_PREFIX + 'Property Cards ' + groupName;
     grid.gridRowCount = Math.max(1, Math.ceil(cards.length / 2));
 
     // A single card doesn't need a second grid column — leaving it in place
     // forces the row to stretch to the sheet's full width, leaving a
     // permanently empty column next to the one real card.
-    var isSingleCard = cards.length === 1;
     if (isSingleCard) {
       try { grid.gridColumnCount = 1; } catch (e) {}
     }
@@ -3777,7 +3790,8 @@ async function buildPropertiesSheetSection(parent: FrameNode, node: SceneNode, s
           previewTarget,
           cards[c],
           contextualByCard[c],
-          allowedVariantRefBaseKeys
+          allowedVariantRefBaseKeys,
+          cardWidth
         );
         grid.appendChild(card);
         try {
@@ -4822,19 +4836,26 @@ async function buildLayoutSheetSection(parent: FrameNode, node: SceneNode): Prom
   row.itemSpacing = 20;
   row.fills = [];
 
+  // Derive column width from SHEET_INNER_WIDTH — the same "one true width"
+  // Anatomy/Variables/Properties all build against — instead of an
+  // independent hardcoded number. Panels can still grow past this if a
+  // component's actual unscaled content needs more room (allowScale=false
+  // below), so this is a baseline, not a hard cap.
+  var columnWidth = Math.floor((SHEET_INNER_WIDTH - 48 - 20) / 2);
+
   var left = figma.createFrame();
   left.name = SPEC_PREFIX + 'Layout Column [' + node.name + ']';
   left.layoutMode = 'VERTICAL';
-  left.resize(410, 10);
+  left.resize(columnWidth, 10);
   left.primaryAxisSizingMode = 'AUTO';
   left.counterAxisSizingMode = 'FIXED';
   left.itemSpacing = 10;
   left.clipsContent = false;
   left.fills = [];
-  var leftPreview = makeLightPreviewPanel(410, 240);
+  var leftPreview = makeLightPreviewPanel(columnWidth, 240);
   leftPreview.name = SPEC_PREFIX + 'Preview Panel [' + node.name + ']';
   leftPreview.appendChild(makeAlignmentGrid(f, getLayoutDirectionLabel(f) === 'Horizontal' ? 'HORIZONTAL' : 'VERTICAL'));
-  var leftClone = cloneNodeCentered(node, leftPreview, 410, 240, false) as any;
+  var leftClone = cloneNodeCentered(node, leftPreview, columnWidth, 240, false) as any;
   // Push clone below the alignment grid (grid bottom = 24+32=56, +16px gap = 72)
   var GRID_CLEAR = 72;
   if ((leftClone.y || 0) < GRID_CLEAR) leftClone.y = GRID_CLEAR;
@@ -4844,7 +4865,7 @@ async function buildLayoutSheetSection(parent: FrameNode, node: SceneNode): Prom
   var leftH = leftClone.height || 0;
   var leftY = leftClone.y || 0;
   var requiredLeftHeight = Math.max(240, leftY + leftH + 60);
-  leftPreview.resize(410, requiredLeftHeight);
+  leftPreview.resize(columnWidth, requiredLeftHeight);
   
   left.appendChild(leftPreview);
   var leftLabel = makeNodeLabel(node.name, node.type, 12, true);
@@ -4881,23 +4902,23 @@ async function buildLayoutSheetSection(parent: FrameNode, node: SceneNode): Prom
   var nestedInfo = nestedTarget as any;
   right.name = SPEC_PREFIX + 'Layout Column [' + node.name + ']';
   right.layoutMode = 'VERTICAL';
-  right.resize(410, 10);
+  right.resize(columnWidth, 10);
   right.primaryAxisSizingMode = 'AUTO';
   right.counterAxisSizingMode = 'FIXED';
   right.itemSpacing = 10;
   right.clipsContent = false;
   right.fills = [];
-  var rightPreview = makeLightPreviewPanel(410, 240);
+  var rightPreview = makeLightPreviewPanel(columnWidth, 240);
   rightPreview.name = SPEC_PREFIX + 'Preview Panel [' + node.name + ']';
   rightPreview.appendChild(makeAlignmentGrid(nestedInfo, getLayoutDirectionLabel(nestedInfo) === 'Horizontal' ? 'HORIZONTAL' : 'VERTICAL'));
-  var rightClone = cloneNodeCentered(node, rightPreview, 410, 240, false) as any;
+  var rightClone = cloneNodeCentered(node, rightPreview, columnWidth, 240, false) as any;
   if ((rightClone.y || 0) < GRID_CLEAR) rightClone.y = GRID_CLEAR;
   drawAutoLayoutGuides(rightClone, rightPreview, nestedInfo, 0, 0, 0, mainComp);
 
   var rightH = rightClone.height || 0;
   var rightY = rightClone.y || 0;
   var requiredRightHeight = Math.max(240, rightY + rightH + 60);
-  rightPreview.resize(410, requiredRightHeight);
+  rightPreview.resize(columnWidth, requiredRightHeight);
   
   right.appendChild(rightPreview);
   var rightLabel = makeNodeLabel(node.name, node.type, 12, true);

@@ -1352,12 +1352,13 @@
     }
     return { previewRoot, target };
   }
-  async function makeStateCard(title, node, stateTarget, spec, precomputedContextualRefs, allowedVariantRefBaseKeys) {
-    var card = makeVerticalAutoFrame(PROPERTIES_CARD_WIDTH);
+  async function makeStateCard(title, node, stateTarget, spec, precomputedContextualRefs, allowedVariantRefBaseKeys, cardWidth) {
+    var width = cardWidth || PROPERTIES_CARD_WIDTH;
+    var card = makeVerticalAutoFrame(width);
     card.name = SPEC_PREFIX + title + " Property";
     card.itemSpacing = 10;
     card.fills = [];
-    var preview = makeLightPreviewPanel(PROPERTIES_CARD_WIDTH, 150);
+    var preview = makeLightPreviewPanel(width, 150);
     preview.name = SPEC_PREFIX + title + " Preview";
     var previewResult = await buildStatePreviewNode(node, preview, stateTarget, spec.propertyKey, spec.value);
     var contextualRefs = precomputedContextualRefs || [];
@@ -1401,7 +1402,7 @@
       card.appendChild(makeText(spec.metaLines[i], 10, FONT_REGULAR, COLOR_MUTED));
     }
     try {
-      card.resizeWithoutConstraints(PROPERTIES_CARD_WIDTH, card.height || 1);
+      card.resizeWithoutConstraints(width, card.height || 1);
     } catch (e) {
     }
     return card;
@@ -1521,7 +1522,8 @@
     }
     return cards;
   }
-  function createPropertyGroupGrid(maxWidth) {
+  function createPropertyGroupGrid(columnWidth) {
+    var width = columnWidth || PROPERTIES_CARD_WIDTH;
     var grid = figma.createFrame();
     grid.layoutMode = "GRID";
     grid.gridColumnCount = 2;
@@ -1534,9 +1536,9 @@
     grid.fills = [];
     try {
       grid.gridColumnSizes[0].type = "FIXED";
-      grid.gridColumnSizes[0].value = PROPERTIES_CARD_WIDTH;
+      grid.gridColumnSizes[0].value = width;
       grid.gridColumnSizes[1].type = "FIXED";
-      grid.gridColumnSizes[1].value = PROPERTIES_CARD_WIDTH;
+      grid.gridColumnSizes[1].value = width;
     } catch (e) {
     }
     return grid;
@@ -1836,10 +1838,13 @@
       if (cards2.length === 0) return;
       hasAnyCards = true;
       section.appendChild(makeText(groupName, 36, FONT_BOLD, COLOR_HEADER));
-      var grid = createPropertyGroupGrid(816);
+      var isSingleCard = cards2.length === 1;
+      var groupInnerWidth = SHEET_INNER_WIDTH - 48;
+      var groupGap = 24;
+      var cardWidth = isSingleCard ? groupInnerWidth : Math.floor((groupInnerWidth - groupGap) / 2);
+      var grid = createPropertyGroupGrid(cardWidth);
       grid.name = SPEC_PREFIX + "Property Cards " + groupName;
       grid.gridRowCount = Math.max(1, Math.ceil(cards2.length / 2));
-      var isSingleCard = cards2.length === 1;
       if (isSingleCard) {
         try {
           grid.gridColumnCount = 1;
@@ -1885,7 +1890,8 @@
           previewTarget,
           cards2[c],
           contextualByCard[c],
-          allowedVariantRefBaseKeys
+          allowedVariantRefBaseKeys,
+          cardWidth
         );
         grid.appendChild(card);
         try {
@@ -2749,26 +2755,27 @@
     row.counterAxisSizingMode = "AUTO";
     row.itemSpacing = 20;
     row.fills = [];
+    var columnWidth = Math.floor((SHEET_INNER_WIDTH - 48 - 20) / 2);
     var left = figma.createFrame();
     left.name = SPEC_PREFIX + "Layout Column [" + node.name + "]";
     left.layoutMode = "VERTICAL";
-    left.resize(410, 10);
+    left.resize(columnWidth, 10);
     left.primaryAxisSizingMode = "AUTO";
     left.counterAxisSizingMode = "FIXED";
     left.itemSpacing = 10;
     left.clipsContent = false;
     left.fills = [];
-    var leftPreview = makeLightPreviewPanel(410, 240);
+    var leftPreview = makeLightPreviewPanel(columnWidth, 240);
     leftPreview.name = SPEC_PREFIX + "Preview Panel [" + node.name + "]";
     leftPreview.appendChild(makeAlignmentGrid(f, getLayoutDirectionLabel(f) === "Horizontal" ? "HORIZONTAL" : "VERTICAL"));
-    var leftClone = cloneNodeCentered(node, leftPreview, 410, 240, false);
+    var leftClone = cloneNodeCentered(node, leftPreview, columnWidth, 240, false);
     var GRID_CLEAR = 72;
     if ((leftClone.y || 0) < GRID_CLEAR) leftClone.y = GRID_CLEAR;
     drawAutoLayoutGuides(leftClone, leftPreview, f, 0, 0, 0, mainComp);
     var leftH = leftClone.height || 0;
     var leftY = leftClone.y || 0;
     var requiredLeftHeight = Math.max(240, leftY + leftH + 60);
-    leftPreview.resize(410, requiredLeftHeight);
+    leftPreview.resize(columnWidth, requiredLeftHeight);
     left.appendChild(leftPreview);
     var leftLabel = makeNodeLabel(node.name, node.type, 12, true);
     leftLabel.name = SPEC_PREFIX + "Node Label [" + node.name + "]";
@@ -2797,22 +2804,22 @@
     var nestedInfo = nestedTarget;
     right.name = SPEC_PREFIX + "Layout Column [" + node.name + "]";
     right.layoutMode = "VERTICAL";
-    right.resize(410, 10);
+    right.resize(columnWidth, 10);
     right.primaryAxisSizingMode = "AUTO";
     right.counterAxisSizingMode = "FIXED";
     right.itemSpacing = 10;
     right.clipsContent = false;
     right.fills = [];
-    var rightPreview = makeLightPreviewPanel(410, 240);
+    var rightPreview = makeLightPreviewPanel(columnWidth, 240);
     rightPreview.name = SPEC_PREFIX + "Preview Panel [" + node.name + "]";
     rightPreview.appendChild(makeAlignmentGrid(nestedInfo, getLayoutDirectionLabel(nestedInfo) === "Horizontal" ? "HORIZONTAL" : "VERTICAL"));
-    var rightClone = cloneNodeCentered(node, rightPreview, 410, 240, false);
+    var rightClone = cloneNodeCentered(node, rightPreview, columnWidth, 240, false);
     if ((rightClone.y || 0) < GRID_CLEAR) rightClone.y = GRID_CLEAR;
     drawAutoLayoutGuides(rightClone, rightPreview, nestedInfo, 0, 0, 0, mainComp);
     var rightH = rightClone.height || 0;
     var rightY = rightClone.y || 0;
     var requiredRightHeight = Math.max(240, rightY + rightH + 60);
-    rightPreview.resize(410, requiredRightHeight);
+    rightPreview.resize(columnWidth, requiredRightHeight);
     right.appendChild(rightPreview);
     var rightLabel = makeNodeLabel(node.name, node.type, 12, true);
     rightLabel.name = SPEC_PREFIX + "Node Label [" + node.name + "]";

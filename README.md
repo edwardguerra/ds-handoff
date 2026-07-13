@@ -23,6 +23,8 @@ Resync doesn't require re-finding the exact source node. Any of these select and
 - The generated sheet itself, selected directly — it already carries its own source id in `pluginData`.
 - **Nothing** — with an empty selection, Resync regenerates every stamped sheet on the page ("Resync All (N)"). Generate once, and every later resync is a single click with no reselecting.
 
+All sections share one width, `SHEET_INNER_WIDTH` (860, defined once in spec.ts). Anatomy and Variables always built against it; Properties and Layout & Spacing used to compute their own independent numbers (`PROPERTIES_CARD_WIDTH`, a hardcoded `410`), which is why a single-card property group or a two-column layout row could look narrower than the rest of the sheet with dead space beside it. Both now derive their card/column width from `SHEET_INNER_WIDTH`, so every section fills the same content width edge-to-edge. A section can still grow past that baseline if a component's real, unscaled size genuinely needs more room (Layout & Spacing does this deliberately via `allowScale=false`) — `equalizeSectionWidths` then brings the rest of the sheet up to match, same as before.
+
 Clicking `DS Handoff` in the Plugins menu always opens the unified UI directly on the Component tab — switch to Tokens with the in-app toggle. The only `figma.command` routing left is for contextual relaunch buttons:
 
 | Entry point | Opens |
