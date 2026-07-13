@@ -502,24 +502,26 @@
     }
     return section;
   }
-  function equalizeSectionWidths(sheet) {
-    var maxWidth = 0;
+  function finalizeSheetWidth(sheet) {
+    var targetWidth = SHEET_INNER_WIDTH;
     for (var i = 0; i < sheet.children.length; i++) {
       var child = sheet.children[i];
       if (!child || child.visible === false) continue;
       if (child.type !== "FRAME") continue;
-      maxWidth = Math.max(maxWidth, child.width || 0);
+      targetWidth = Math.max(targetWidth, child.width || 0);
     }
-    if (maxWidth <= 0) return;
+    sheet.counterAxisSizingMode = "FIXED";
+    try {
+      sheet.resizeWithoutConstraints(targetWidth, sheet.height || 1);
+    } catch (e) {
+    }
     for (var j = 0; j < sheet.children.length; j++) {
       var section = sheet.children[j];
       if (!section || section.visible === false) continue;
       if (section.type !== "FRAME") continue;
-      if ((section.width || 0) !== maxWidth) {
-        try {
-          section.resize(maxWidth, section.height || 1);
-        } catch (e) {
-        }
+      try {
+        section.layoutSizingHorizontal = "FILL";
+      } catch (e) {
       }
     }
   }
@@ -971,6 +973,10 @@
     row.appendChild(preview);
     row.appendChild(detail);
     section.appendChild(row);
+    try {
+      row.layoutSizingHorizontal = "FILL";
+    } catch (e) {
+    }
     parent.appendChild(section);
   }
   function getPropertyBaseName(name) {
@@ -1838,19 +1844,23 @@
       if (cards2.length === 0) return;
       hasAnyCards = true;
       section.appendChild(makeText(groupName, 36, FONT_BOLD, COLOR_HEADER));
-      var isSingleCard = cards2.length === 1;
       var groupInnerWidth = SHEET_INNER_WIDTH - 48;
       var groupGap = 24;
-      var cardWidth = isSingleCard ? groupInnerWidth : Math.floor((groupInnerWidth - groupGap) / 2);
-      var grid = createPropertyGroupGrid(cardWidth);
-      grid.name = SPEC_PREFIX + "Property Cards " + groupName;
-      grid.gridRowCount = Math.max(1, Math.ceil(cards2.length / 2));
-      if (isSingleCard) {
-        try {
-          grid.gridColumnCount = 1;
-        } catch (e) {
-        }
+      var cardWidth = cards2.length === 1 ? groupInnerWidth : Math.floor((groupInnerWidth - groupGap) / 2);
+      var useGrid = cards2.length > 2;
+      var grid;
+      if (useGrid) {
+        grid = createPropertyGroupGrid(cardWidth);
+        grid.gridRowCount = Math.max(1, Math.ceil(cards2.length / 2));
+      } else {
+        grid = figma.createFrame();
+        grid.layoutMode = "HORIZONTAL";
+        grid.itemSpacing = groupGap;
+        grid.primaryAxisSizingMode = "AUTO";
+        grid.counterAxisSizingMode = "AUTO";
+        grid.fills = [];
       }
+      grid.name = SPEC_PREFIX + "Property Cards " + groupName;
       var contextualByCard = [];
       var allowedVariantRefBaseKeys = void 0;
       if (cards2.length > 1 && cards2[0].propertyType === "VARIANT") {
@@ -1895,9 +1905,9 @@
         );
         grid.appendChild(card);
         try {
-          card.layoutSizingHorizontal = "FILL";
           card.layoutSizingVertical = "HUG";
-          card.gridColumnSpan = 1;
+          card.layoutSizingHorizontal = "FILL";
+          if (useGrid) card.gridColumnSpan = 1;
         } catch (e) {
         }
       }
@@ -1908,11 +1918,9 @@
         }
       }
       section.appendChild(grid);
-      if (!isSingleCard) {
-        try {
-          grid.layoutSizingHorizontal = "FILL";
-        } catch (e) {
-        }
+      try {
+        grid.layoutSizingHorizontal = "FILL";
+      } catch (e) {
       }
     }
     for (var s = 0; s < stateVariantGroups.length; s++) {
@@ -2601,6 +2609,10 @@
     table.itemSpacing = 8;
     table.fills = [];
     table.layoutSizingVertical = "HUG";
+    try {
+      table.layoutSizingHorizontal = "FILL";
+    } catch (e) {
+    }
     var header = figma.createFrame();
     header.name = SPEC_PREFIX + "Variables Header";
     header.layoutMode = "HORIZONTAL";
@@ -2610,6 +2622,10 @@
     header.itemSpacing = 12;
     header.fills = [];
     header.layoutSizingVertical = "HUG";
+    try {
+      header.layoutSizingHorizontal = "FILL";
+    } catch (e) {
+    }
     var hName = makeText("Name", 11, FONT_BOLD, COLOR_MUTED);
     hName.name = SPEC_PREFIX + "Variables Header Name";
     hName.resize(320, hName.height);
@@ -2626,6 +2642,10 @@
     var divider = makeHorizontalDivider(SHEET_INNER_WIDTH - 48);
     divider.name = SPEC_PREFIX + "Variables Divider";
     table.appendChild(divider);
+    try {
+      divider.layoutSizingHorizontal = "FILL";
+    } catch (e) {
+    }
     function makeVariablePreviewNode(row2, index) {
       if (row2.previewKind === "color" && row2.fallbackColor) {
         var swatch = figma.createRectangle();
@@ -2713,6 +2733,10 @@
       row.resize(SHEET_INNER_WIDTH - 48, 1);
       row.itemSpacing = 12;
       row.fills = [];
+      try {
+        row.layoutSizingHorizontal = "FILL";
+      } catch (e) {
+      }
       row.layoutSizingVertical = "HUG";
       var nameCellWrap = figma.createFrame();
       nameCellWrap.name = SPEC_PREFIX + "Variables Name Cell " + (i + 1);
@@ -2871,6 +2895,26 @@
     row.appendChild(left);
     row.appendChild(right);
     section.appendChild(row);
+    try {
+      row.layoutSizingHorizontal = "FILL";
+    } catch (e) {
+    }
+    try {
+      left.layoutSizingHorizontal = "FILL";
+    } catch (e) {
+    }
+    try {
+      right.layoutSizingHorizontal = "FILL";
+    } catch (e) {
+    }
+    try {
+      leftPreview.layoutSizingHorizontal = "FILL";
+    } catch (e) {
+    }
+    try {
+      rightPreview.layoutSizingHorizontal = "FILL";
+    } catch (e) {
+    }
     parent.appendChild(section);
   }
   function propagateResolvedVariableModes(sheet, sourceNode) {
@@ -2921,7 +2965,7 @@
     if (modules.variables) {
       await buildVariablesSheetSection(sheet, node);
     }
-    equalizeSectionWidths(sheet);
+    finalizeSheetWidth(sheet);
     sheet.x = b.x;
     sheet.y = b.y + b.h + 80;
     page.appendChild(sheet);

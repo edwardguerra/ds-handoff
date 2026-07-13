@@ -1979,26 +1979,39 @@ function makeMetaSection(): FrameNode {
   return section;
 }
 
-function equalizeSectionWidths(sheet: FrameNode): void {
-  var maxWidth = 0;
+// Establishes the sheet's width as the one real, explicit source of truth
+// (FIXED, not HUG) and makes every top-level section a genuine FILL child
+// of it — real Figma auto-layout sizing, not a precomputed number that
+// merely happens to agree with everyone else. This is what makes resizing
+// the "spec" frame by hand in Figma actually cascade to its sections,
+// instead of leaving them stuck at whatever width they were built with.
+//
+// Sections can still legitimately need more than SHEET_INNER_WIDTH (e.g.
+// Layout & Spacing growing to avoid distorting an oversized component) —
+// if any section's natural width exceeds the baseline, the sheet grows to
+// match instead of clipping it, same safety net the old width-matching
+// pass provided.
+function finalizeSheetWidth(sheet: FrameNode): void {
+  var targetWidth = SHEET_INNER_WIDTH;
   for (var i = 0; i < sheet.children.length; i++) {
     var child = sheet.children[i] as any;
     if (!child || child.visible === false) continue;
     if (child.type !== 'FRAME') continue;
-    maxWidth = Math.max(maxWidth, child.width || 0);
+    targetWidth = Math.max(targetWidth, child.width || 0);
   }
 
-  if (maxWidth <= 0) return;
+  sheet.counterAxisSizingMode = 'FIXED';
+  try {
+    sheet.resizeWithoutConstraints(targetWidth, sheet.height || 1);
+  } catch (e) {}
 
   for (var j = 0; j < sheet.children.length; j++) {
     var section = sheet.children[j] as any;
     if (!section || section.visible === false) continue;
     if (section.type !== 'FRAME') continue;
-    if ((section.width || 0) !== maxWidth) {
-      try {
-        section.resize(maxWidth, section.height || 1);
-      } catch (e) {}
-    }
+    try {
+      section.layoutSizingHorizontal = 'FILL';
+    } catch (e) {}
   }
 }
 
@@ -2654,6 +2667,10 @@ async function buildAnatomySheetSection(parent: FrameNode, node: SceneNode): Pro
   row.appendChild(preview);
   row.appendChild(detail);
   section.appendChild(row);
+  // Real FILL relative to section (preview/previewCanvas already stretch
+  // relative to row via layoutAlign='STRETCH'), so this section tracks the
+  // sheet's width instead of sitting at a fixed ANATOMY_W.
+  try { (row as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
   parent.appendChild(section);
 }
 
@@ -3731,25 +3748,35 @@ async function buildPropertiesSheetSection(parent: FrameNode, node: SceneNode, s
 
     // Derive card width from SHEET_INNER_WIDTH — the same "one true width"
     // Anatomy and Variables already build against — instead of the old
-    // independent PROPERTIES_CARD_WIDTH constant, so a single card fills its
-    // full available row instead of leaving an empty second column, and a
-    // pair of cards fills the row edge-to-edge instead of floating narrower
-    // than the section around them.
-    var isSingleCard = cards.length === 1;
+    // independent PROPERTIES_CARD_WIDTH constant. Used as the starting size
+    // for 1-2 card rows (which use real FILL sizing below and will track
+    // the sheet if it's later resized) and as a fixed size for 3+ card
+    // groups (still GRID-based — see note below).
     var groupInnerWidth = SHEET_INNER_WIDTH - 48;
     var groupGap = 24;
-    var cardWidth = isSingleCard ? groupInnerWidth : Math.floor((groupInnerWidth - groupGap) / 2);
+    var cardWidth = cards.length === 1 ? groupInnerWidth : Math.floor((groupInnerWidth - groupGap) / 2);
 
-    var grid = createPropertyGroupGrid(cardWidth);
-    grid.name = SPEC_PREFIX + 'Property Cards ' + groupName;
-    grid.gridRowCount = Math.max(1, Math.ceil(cards.length / 2));
-
-    // A single card doesn't need a second grid column — leaving it in place
-    // forces the row to stretch to the sheet's full width, leaving a
-    // permanently empty column next to the one real card.
-    if (isSingleCard) {
-      try { grid.gridColumnCount = 1; } catch (e) {}
+    // 1-2 cards (the vast majority: booleans, instance-swaps, most variant
+    // groups) get a plain HORIZONTAL auto-layout row with real FILL
+    // children — genuinely reactive if the sheet is resized later, unlike
+    // GRID's fixed-width column tracks. 3+ cards keep the GRID (wraps into
+    // multiple rows of 2), since WRAP layouts require fixed/hug child sizes
+    // and can't use FILL — a fixed card width there is an acceptable
+    // trade-off for a case this rare.
+    var useGrid = cards.length > 2;
+    var grid: FrameNode;
+    if (useGrid) {
+      grid = createPropertyGroupGrid(cardWidth);
+      grid.gridRowCount = Math.max(1, Math.ceil(cards.length / 2));
+    } else {
+      grid = figma.createFrame();
+      grid.layoutMode = 'HORIZONTAL';
+      grid.itemSpacing = groupGap;
+      grid.primaryAxisSizingMode = 'AUTO';
+      grid.counterAxisSizingMode = 'AUTO';
+      grid.fills = [];
     }
+    grid.name = SPEC_PREFIX + 'Property Cards ' + groupName;
 
     var contextualByCard: PropertyVariableRef[][] = [];
     var allowedVariantRefBaseKeys: { [key: string]: boolean } | undefined = undefined;
@@ -3802,9 +3829,9 @@ async function buildPropertiesSheetSection(parent: FrameNode, node: SceneNode, s
         );
         grid.appendChild(card);
         try {
-          (card as any).layoutSizingHorizontal = 'FILL';
           (card as any).layoutSizingVertical = 'HUG';
-          (card as any).gridColumnSpan = 1;
+          (card as any).layoutSizingHorizontal = 'FILL';
+          if (useGrid) (card as any).gridColumnSpan = 1;
         } catch (e) {}
       }
 
@@ -3816,11 +3843,9 @@ async function buildPropertiesSheetSection(parent: FrameNode, node: SceneNode, s
 
       section.appendChild(grid);
 
-      if (!isSingleCard) {
-        try {
-          (grid as any).layoutSizingHorizontal = 'FILL';
-        } catch (e) {}
-      }
+      try {
+        (grid as any).layoutSizingHorizontal = 'FILL';
+      } catch (e) {}
   }
 
   for (var s = 0; s < stateVariantGroups.length; s++) {
@@ -4671,6 +4696,9 @@ async function buildVariablesSheetSection(parent: FrameNode, node: SceneNode): P
   table.itemSpacing = 8;
   table.fills = [];
   (table as any).layoutSizingVertical = 'HUG';
+  // Real FILL relative to section, so the table tracks the sheet's width
+  // instead of sitting at whatever fixed number it was generated with.
+  try { (table as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
 
   var header = figma.createFrame();
   header.name = SPEC_PREFIX + 'Variables Header';
@@ -4681,6 +4709,7 @@ async function buildVariablesSheetSection(parent: FrameNode, node: SceneNode): P
   header.itemSpacing = 12;
   header.fills = [];
   (header as any).layoutSizingVertical = 'HUG';
+  try { (header as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
 
   var hName = makeText('Name', 11, FONT_BOLD, COLOR_MUTED);
   hName.name = SPEC_PREFIX + 'Variables Header Name';
@@ -4698,6 +4727,7 @@ async function buildVariablesSheetSection(parent: FrameNode, node: SceneNode): P
   var divider = makeHorizontalDivider(SHEET_INNER_WIDTH - 48);
   divider.name = SPEC_PREFIX + 'Variables Divider';
   table.appendChild(divider);
+  try { (divider as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
 
   function makeVariablePreviewNode(row: VariableUsageRow, index: number): SceneNode {
     if (row.previewKind === 'color' && row.fallbackColor) {
@@ -4792,6 +4822,7 @@ async function buildVariablesSheetSection(parent: FrameNode, node: SceneNode): P
     row.resize(SHEET_INNER_WIDTH - 48, 1);
     row.itemSpacing = 12;
     row.fills = [];
+    try { (row as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
     (row as any).layoutSizingVertical = 'HUG';
 
     var nameCellWrap = figma.createFrame();
@@ -4995,6 +5026,15 @@ async function buildLayoutSheetSection(parent: FrameNode, node: SceneNode): Prom
   row.appendChild(right);
   section.appendChild(row);
 
+  // Real FILL sizing, cascading row → columns → preview panels, so this
+  // section actually tracks the sheet if it's resized later instead of
+  // sitting at whatever fixed columnWidth it was generated with.
+  try { row.layoutSizingHorizontal = 'FILL'; } catch (e) {}
+  try { (left as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
+  try { (right as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
+  try { (leftPreview as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
+  try { (rightPreview as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
+
   parent.appendChild(section);
 }
 
@@ -5063,7 +5103,7 @@ async function createReferenceStyleSpecSheetAsync(node: SceneNode, page: PageNod
     await buildVariablesSheetSection(sheet, node);
   }
 
-  equalizeSectionWidths(sheet);
+  finalizeSheetWidth(sheet);
 
   sheet.x = b.x;
   sheet.y = b.y + b.h + 80;
