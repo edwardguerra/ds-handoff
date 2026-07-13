@@ -1825,6 +1825,15 @@ function centerNodeInPanel(node: SceneNode, panel: FrameNode, maxWidth: number, 
   if (panel.layoutMode !== 'NONE' && 'layoutPositioning' in node) {
     (node as any).layoutPositioning = 'ABSOLUTE';
   }
+  // Without this, Figma defaults new nodes to MIN/MIN (pinned top-left):
+  // if the panel is later resized wider — by this sheet's own FILL cascade
+  // finishing after this node was positioned, or by a user resizing the
+  // sheet by hand afterward — the node just stays at its original x/y
+  // instead of staying centered. CENTER/CENTER makes Figma keep it
+  // centered reactively, with no manual recentering pass needed.
+  try {
+    (node as any).constraints = { horizontal: 'CENTER', vertical: 'CENTER' };
+  } catch (e) {}
   return node;
 }
 
@@ -2204,6 +2213,14 @@ async function buildAnatomySheetSection(parent: FrameNode, node: SceneNode): Pro
   preview.appendChild(previewCanvas);
   previewCanvas.x = 0;
   previewCanvas.y = 0;
+  // previewCanvas.layoutAlign='STRETCH' above is inert: preview (its parent)
+  // is layoutMode='NONE', and STRETCH only does anything inside an
+  // auto-layout parent. LEFT_RIGHT is the equivalent for NONE-mode parents
+  // — it keeps previewCanvas's left/right edges pinned to preview's, so it
+  // actually widens if preview is later stretched wider by row's own FILL.
+  try {
+    (previewCanvas as any).constraints = { horizontal: 'LEFT_RIGHT', vertical: 'MIN' };
+  } catch (e) {}
 
   var previewSource: SceneNode = await makePreviewSourceNode(node);
 
@@ -2549,6 +2566,15 @@ async function buildAnatomySheetSection(parent: FrameNode, node: SceneNode): Pro
     }
 
     preview.appendChild(markerFrame); // Add markers to the wrapper frame as one auto-layout unit
+    // The component clone re-centers reactively (CENTER/CENTER constraints
+    // set in centerNodeInPanel) if this panel is later widened via FILL.
+    // Each marker was positioned relative to the component's build-time
+    // location, so it needs the same constraint to shift in sync and stay
+    // aligned with whatever it's pointing at, instead of staying frozen
+    // while the component it's labeling moves.
+    try {
+      (markerFrame as any).constraints = { horizontal: 'CENTER', vertical: 'CENTER' };
+    } catch (e) {}
   }
 
   var detail = figma.createFrame();
@@ -3167,6 +3193,11 @@ async function makeStateCard(
   });
 
   card.appendChild(preview);
+  // Without this, the panel stays pinned at its build-time width even if
+  // the card around it later widens via FILL — leaving a narrow preview
+  // floating inside a wider card. The clone inside re-centers itself via
+  // the CENTER/CENTER constraints set in centerNodeInPanel.
+  try { (preview as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
   card.appendChild(makeText(title, 30, FONT_BOLD, COLOR_HEADER));
   card.appendChild(makeNodeLabel(stateTarget.targetName, node.type, 11, false));
   card.appendChild(makeText('Property: ' + getPropertyBaseName(spec.propertyKey), 11, FONT_REGULAR, COLOR_VALUE));
@@ -3817,6 +3848,7 @@ async function buildPropertiesSheetSection(parent: FrameNode, node: SceneNode, s
       }
     }
 
+      var cardRefs: FrameNode[] = [];
       for (var c = 0; c < cards.length; c++) {
         var card = await makeStateCard(
           cards[c].title,
@@ -3830,9 +3862,9 @@ async function buildPropertiesSheetSection(parent: FrameNode, node: SceneNode, s
         grid.appendChild(card);
         try {
           (card as any).layoutSizingVertical = 'HUG';
-          (card as any).layoutSizingHorizontal = 'FILL';
           if (useGrid) (card as any).gridColumnSpan = 1;
         } catch (e) {}
+        cardRefs.push(card);
       }
 
       if (maxWidth) {
@@ -3846,6 +3878,12 @@ async function buildPropertiesSheetSection(parent: FrameNode, node: SceneNode, s
       try {
         (grid as any).layoutSizingHorizontal = 'FILL';
       } catch (e) {}
+
+      // Set once grid's own FILL relationship to section is established —
+      // top-down, not the reverse, matching finalizeSheetWidth's pattern.
+      for (var ci = 0; ci < cardRefs.length; ci++) {
+        try { (cardRefs[ci] as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
+      }
   }
 
   for (var s = 0; s < stateVariantGroups.length; s++) {

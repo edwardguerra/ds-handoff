@@ -365,6 +365,10 @@
     if (panel.layoutMode !== "NONE" && "layoutPositioning" in node) {
       node.layoutPositioning = "ABSOLUTE";
     }
+    try {
+      node.constraints = { horizontal: "CENTER", vertical: "CENTER" };
+    } catch (e) {
+    }
     return node;
   }
   function cloneNodeCentered(source, panel, maxWidth, maxHeight, allowScale) {
@@ -593,6 +597,10 @@
     preview.appendChild(previewCanvas);
     previewCanvas.x = 0;
     previewCanvas.y = 0;
+    try {
+      previewCanvas.constraints = { horizontal: "LEFT_RIGHT", vertical: "MIN" };
+    } catch (e) {
+    }
     var previewSource = await makePreviewSourceNode(node);
     try {
       var previewAsAny = previewSource;
@@ -870,6 +878,10 @@
         }
       }
       preview.appendChild(markerFrame);
+      try {
+        markerFrame.constraints = { horizontal: "CENTER", vertical: "CENTER" };
+      } catch (e) {
+      }
     }
     var detail = figma.createFrame();
     detail.name = SPEC_PREFIX + "Anatomy Legend";
@@ -1395,6 +1407,10 @@
       return getPropertyVariableRefUniqueKey(a).localeCompare(getPropertyVariableRefUniqueKey(b));
     });
     card.appendChild(preview);
+    try {
+      preview.layoutSizingHorizontal = "FILL";
+    } catch (e) {
+    }
     card.appendChild(makeText(title, 30, FONT_BOLD, COLOR_HEADER));
     card.appendChild(makeNodeLabel(stateTarget.targetName, node.type, 11, false));
     card.appendChild(makeText("Property: " + getPropertyBaseName(spec.propertyKey), 11, FONT_REGULAR, COLOR_VALUE));
@@ -1893,6 +1909,7 @@
           }
         }
       }
+      var cardRefs = [];
       for (var c = 0; c < cards2.length; c++) {
         var card = await makeStateCard(
           cards2[c].title,
@@ -1906,10 +1923,10 @@
         grid.appendChild(card);
         try {
           card.layoutSizingVertical = "HUG";
-          card.layoutSizingHorizontal = "FILL";
           if (useGrid) card.gridColumnSpan = 1;
         } catch (e) {
         }
+        cardRefs.push(card);
       }
       if (maxWidth) {
         try {
@@ -1921,6 +1938,12 @@
       try {
         grid.layoutSizingHorizontal = "FILL";
       } catch (e) {
+      }
+      for (var ci = 0; ci < cardRefs.length; ci++) {
+        try {
+          cardRefs[ci].layoutSizingHorizontal = "FILL";
+        } catch (e) {
+        }
       }
     }
     for (var s = 0; s < stateVariantGroups.length; s++) {
