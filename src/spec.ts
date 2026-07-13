@@ -2214,12 +2214,14 @@ async function buildAnatomySheetSection(parent: FrameNode, node: SceneNode): Pro
   previewCanvas.x = 0;
   previewCanvas.y = 0;
   // previewCanvas.layoutAlign='STRETCH' above is inert: preview (its parent)
-  // is layoutMode='NONE', and STRETCH only does anything inside an
-  // auto-layout parent. LEFT_RIGHT is the equivalent for NONE-mode parents
-  // — it keeps previewCanvas's left/right edges pinned to preview's, so it
-  // actually widens if preview is later stretched wider by row's own FILL.
+  // is layoutMode='NONE', and layoutAlign only does anything inside an
+  // auto-layout parent. The constraints API is what applies here, and its
+  // both-edges-pinned value is 'STRETCH' ("Left and right" in the UI — an
+  // earlier pass used 'LEFT_RIGHT', which isn't a valid API value, so the
+  // assignment threw, the catch swallowed it, and the canvas silently kept
+  // its default left-pin while everything around it widened).
   try {
-    (previewCanvas as any).constraints = { horizontal: 'LEFT_RIGHT', vertical: 'MIN' };
+    (previewCanvas as any).constraints = { horizontal: 'STRETCH', vertical: 'MIN' };
   } catch (e) {}
 
   var previewSource: SceneNode = await makePreviewSourceNode(node);
@@ -3543,6 +3545,14 @@ function drawAutoLayoutGuides(targetClone: any, panel: FrameNode, sourceInfo: an
     wrapper.x = rx;
     wrapper.y = ry;
     panel.appendChild(wrapper);
+    // Positioned relative to the clone's build-time location; the clone
+    // re-centers reactively (CENTER/CENTER in centerNodeInPanel), so the
+    // overlay needs the same constraint to shift in lockstep and stay on
+    // the padding it's highlighting. Grid/direction arrows deliberately
+    // keep default pinning — they're chrome, not tied to the instance.
+    try {
+      (wrapper as any).constraints = { horizontal: 'CENTER', vertical: 'CENTER' };
+    } catch (e) {}
   }
 
   addPadRect(x, y, w, pt, pt, 'Top');
@@ -3603,6 +3613,10 @@ function drawAutoLayoutGuides(targetClone: any, panel: FrameNode, sourceInfo: an
         gapFrame.x = x + x1;
         gapFrame.y = y + topY;
         panel.appendChild(gapFrame);
+        // Track the re-centering clone, same as the padding overlays.
+        try {
+          (gapFrame as any).constraints = { horizontal: 'CENTER', vertical: 'CENTER' };
+        } catch (e) {}
       }
     } else {
       var y1 = (a.y || 0) + (a.height || 0);
@@ -3639,6 +3653,10 @@ function drawAutoLayoutGuides(targetClone: any, panel: FrameNode, sourceInfo: an
         gapFrame.x = x + leftX;
         gapFrame.y = y + y1;
         panel.appendChild(gapFrame);
+        // Track the re-centering clone, same as the padding overlays.
+        try {
+          (gapFrame as any).constraints = { horizontal: 'CENTER', vertical: 'CENTER' };
+        } catch (e) {}
       }
     }
   }

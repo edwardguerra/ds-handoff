@@ -598,7 +598,7 @@
     previewCanvas.x = 0;
     previewCanvas.y = 0;
     try {
-      previewCanvas.constraints = { horizontal: "LEFT_RIGHT", vertical: "MIN" };
+      previewCanvas.constraints = { horizontal: "STRETCH", vertical: "MIN" };
     } catch (e) {
     }
     var previewSource = await makePreviewSourceNode(node);
@@ -1699,6 +1699,10 @@
       wrapper.x = rx;
       wrapper.y = ry;
       panel.appendChild(wrapper);
+      try {
+        wrapper.constraints = { horizontal: "CENTER", vertical: "CENTER" };
+      } catch (e) {
+      }
     }
     addPadRect(x, y, w, pt, pt, "Top");
     addPadRect(x + w - pr, y, pr, h, pr, "Right");
@@ -1748,6 +1752,10 @@
           gapFrame.x = x + x1;
           gapFrame.y = y + topY;
           panel.appendChild(gapFrame);
+          try {
+            gapFrame.constraints = { horizontal: "CENTER", vertical: "CENTER" };
+          } catch (e) {
+          }
         }
       } else {
         var y1 = (a.y || 0) + (a.height || 0);
@@ -1780,6 +1788,10 @@
           gapFrame.x = x + leftX;
           gapFrame.y = y + y1;
           panel.appendChild(gapFrame);
+          try {
+            gapFrame.constraints = { horizontal: "CENTER", vertical: "CENTER" };
+          } catch (e) {
+          }
         }
       }
     }
