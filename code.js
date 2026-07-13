@@ -2632,10 +2632,6 @@
     table.itemSpacing = 8;
     table.fills = [];
     table.layoutSizingVertical = "HUG";
-    try {
-      table.layoutSizingHorizontal = "FILL";
-    } catch (e) {
-    }
     var header = figma.createFrame();
     header.name = SPEC_PREFIX + "Variables Header";
     header.layoutMode = "HORIZONTAL";
@@ -2645,10 +2641,6 @@
     header.itemSpacing = 12;
     header.fills = [];
     header.layoutSizingVertical = "HUG";
-    try {
-      header.layoutSizingHorizontal = "FILL";
-    } catch (e) {
-    }
     var hName = makeText("Name", 11, FONT_BOLD, COLOR_MUTED);
     hName.name = SPEC_PREFIX + "Variables Header Name";
     hName.resize(320, hName.height);
@@ -2662,6 +2654,10 @@
     header.appendChild(hFallback);
     header.appendChild(hApplied);
     table.appendChild(header);
+    try {
+      header.layoutSizingHorizontal = "FILL";
+    } catch (e) {
+    }
     var divider = makeHorizontalDivider(SHEET_INNER_WIDTH - 48);
     divider.name = SPEC_PREFIX + "Variables Divider";
     table.appendChild(divider);
@@ -2756,10 +2752,6 @@
       row.resize(SHEET_INNER_WIDTH - 48, 1);
       row.itemSpacing = 12;
       row.fills = [];
-      try {
-        row.layoutSizingHorizontal = "FILL";
-      } catch (e) {
-      }
       row.layoutSizingVertical = "HUG";
       var nameCellWrap = figma.createFrame();
       nameCellWrap.name = SPEC_PREFIX + "Variables Name Cell " + (i + 1);
@@ -2781,8 +2773,16 @@
       row.appendChild(fallbackCell);
       row.appendChild(appliedCell);
       table.appendChild(row);
+      try {
+        row.layoutSizingHorizontal = "FILL";
+      } catch (e) {
+      }
     }
     section.appendChild(table);
+    try {
+      table.layoutSizingHorizontal = "FILL";
+    } catch (e) {
+    }
     parent.appendChild(section);
   }
   async function buildLayoutSheetSection(parent, node) {

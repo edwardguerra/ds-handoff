@@ -4734,9 +4734,11 @@ async function buildVariablesSheetSection(parent: FrameNode, node: SceneNode): P
   table.itemSpacing = 8;
   table.fills = [];
   (table as any).layoutSizingVertical = 'HUG';
-  // Real FILL relative to section, so the table tracks the sheet's width
-  // instead of sitting at whatever fixed number it was generated with.
-  try { (table as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
+  // NOTE: table's FILL is set at the bottom of this function, after
+  // section.appendChild(table) — layoutSizingHorizontal='FILL' throws on a
+  // node that isn't yet inside an auto-layout parent, and the try/catch
+  // pattern here swallows that throw silently (which is exactly how this
+  // section previously ended up stuck at a fixed width).
 
   var header = figma.createFrame();
   header.name = SPEC_PREFIX + 'Variables Header';
@@ -4747,7 +4749,6 @@ async function buildVariablesSheetSection(parent: FrameNode, node: SceneNode): P
   header.itemSpacing = 12;
   header.fills = [];
   (header as any).layoutSizingVertical = 'HUG';
-  try { (header as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
 
   var hName = makeText('Name', 11, FONT_BOLD, COLOR_MUTED);
   hName.name = SPEC_PREFIX + 'Variables Header Name';
@@ -4762,6 +4763,7 @@ async function buildVariablesSheetSection(parent: FrameNode, node: SceneNode): P
   header.appendChild(hFallback);
   header.appendChild(hApplied);
   table.appendChild(header);
+  try { (header as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
   var divider = makeHorizontalDivider(SHEET_INNER_WIDTH - 48);
   divider.name = SPEC_PREFIX + 'Variables Divider';
   table.appendChild(divider);
@@ -4860,7 +4862,6 @@ async function buildVariablesSheetSection(parent: FrameNode, node: SceneNode): P
     row.resize(SHEET_INNER_WIDTH - 48, 1);
     row.itemSpacing = 12;
     row.fills = [];
-    try { (row as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
     (row as any).layoutSizingVertical = 'HUG';
 
     var nameCellWrap = figma.createFrame();
@@ -4885,9 +4886,11 @@ async function buildVariablesSheetSection(parent: FrameNode, node: SceneNode): P
     row.appendChild(fallbackCell);
     row.appendChild(appliedCell);
     table.appendChild(row);
+    try { (row as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
   }
 
   section.appendChild(table);
+  try { (table as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
   parent.appendChild(section);
 }
 
