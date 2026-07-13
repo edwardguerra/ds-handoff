@@ -2866,6 +2866,22 @@
     section.appendChild(row);
     parent.appendChild(section);
   }
+  function propagateResolvedVariableModes(sheet, sourceNode) {
+    try {
+      var resolved = sourceNode.resolvedVariableModes;
+      if (!resolved) return;
+      var collectionIds = Object.keys(resolved);
+      for (var i = 0; i < collectionIds.length; i++) {
+        var collectionId = collectionIds[i];
+        var modeId = resolved[collectionId];
+        try {
+          sheet.setExplicitVariableModeForCollection(collectionId, modeId);
+        } catch (e) {
+        }
+      }
+    } catch (e) {
+    }
+  }
   async function createReferenceStyleSpecSheetAsync(node, page, modules) {
     var b = getNodeBounds(node);
     var stateTarget = await findStateTargetAsync(node);
@@ -2879,6 +2895,7 @@
     sheet.paddingTop = 0;
     sheet.paddingBottom = 0;
     sheet.paddingLeft = 0;
+    propagateResolvedVariableModes(sheet, node);
     sheet.paddingRight = 0;
     sheet.clipsContent = false;
     sheet.fills = solidPaint(COLOR_PAGE_BG);

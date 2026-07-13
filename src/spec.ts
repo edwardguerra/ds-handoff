@@ -4970,6 +4970,32 @@ async function buildLayoutSheetSection(parent: FrameNode, node: SceneNode): Prom
   parent.appendChild(section);
 }
 
+// The node specs are generated from may sit inside a frame with an explicit
+// variable mode override (e.g. a "Dark" mode applied higher up the tree).
+// Clones placed into our own sheet don't inherit that — they're siblings on
+// the page, not descendants of the overridden frame — so without this every
+// preview in Anatomy/Properties silently falls back to the default mode.
+// Propagating the node's *resolved* modes onto the sheet itself fixes that
+// for every clone nested inside it, no matter how deep.
+function propagateResolvedVariableModes(sheet: FrameNode, sourceNode: SceneNode): void {
+  try {
+    var resolved = (sourceNode as any).resolvedVariableModes as { [collectionId: string]: string } | undefined;
+    if (!resolved) return;
+    var collectionIds = Object.keys(resolved);
+    for (var i = 0; i < collectionIds.length; i++) {
+      var collectionId = collectionIds[i];
+      var modeId = resolved[collectionId];
+      try {
+        sheet.setExplicitVariableModeForCollection(collectionId as any, modeId);
+      } catch (e) {
+        // collection may no longer exist — skip it
+      }
+    }
+  } catch (e) {
+    // resolvedVariableModes unsupported on this node type — nothing to propagate
+  }
+}
+
 async function createReferenceStyleSpecSheetAsync(node: SceneNode, page: PageNode, modules: any): Promise<FrameNode> {
   var b = getNodeBounds(node);
   var stateTarget = await findStateTargetAsync(node);
@@ -4984,6 +5010,7 @@ async function createReferenceStyleSpecSheetAsync(node: SceneNode, page: PageNod
   sheet.paddingTop = 0;
   sheet.paddingBottom = 0;
   sheet.paddingLeft = 0;
+  propagateResolvedVariableModes(sheet, node);
   sheet.paddingRight = 0;
   sheet.clipsContent = false;
   sheet.fills = solidPaint(COLOR_PAGE_BG);

@@ -16,6 +16,8 @@ One window (`ui.html`) with a **Component | Tokens** toggle:
 
 Both resync flows follow the same pattern: the generated frame is stamped with `pluginData` (source node id + module selection for Component; a doc marker + collection/style ids for Tokens) so it can be found and regenerated without depending on canvas selection.
 
+Variable **mode** context (e.g. a Dark mode applied to a frame higher up the tree) doesn't inherit into cloned previews — clones end up as siblings on the page, not descendants of whatever frame set the override. `propagateResolvedVariableModes` in spec.ts reads the source node's `resolvedVariableModes` and re-applies each one to the generated sheet via `setExplicitVariableModeForCollection`, so Anatomy/Properties previews resolve variables the same way the original did, mode included.
+
 Resync doesn't require re-finding the exact source node. Any of these select and trigger it:
 - The exact node specs were generated from, an ancestor frame wrapping it, or anything nested inside it (any depth, including nested frames).
 - The generated sheet itself, selected directly — it already carries its own source id in `pluginData`.
