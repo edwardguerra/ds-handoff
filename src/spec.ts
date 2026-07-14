@@ -3982,9 +3982,20 @@ async function buildPropertiesSheetSection(parent: FrameNode, node: SceneNode, s
       // grid itself is also left un-FILLed so it hugs its true (wider)
       // content instead of being force-shrunk to the section's width;
       // finalizeSheetWidth then grows the whole sheet to match.
+      //
+      // GRID is the exception: a GRID child left without an explicit
+      // layoutSizingHorizontal doesn't place into its own cell correctly —
+      // it can overlap other cards instead of sitting beside them. useGrid
+      // groups (3+ cards) always get FILL, same as before this growth
+      // tracking existed, even though that means an oversized card in a
+      // 3+ group can still crop in rare cases. The plain HORIZONTAL row
+      // (1-2 cards, the common case) doesn't have this constraint and
+      // keeps the growth-aware behavior.
       var anyCardGrew = false;
-      for (var cg = 0; cg < cardRefs.length; cg++) {
-        if ((cardRefs[cg].width || cardWidth) > cardWidth + 0.5) { anyCardGrew = true; break; }
+      if (!useGrid) {
+        for (var cg = 0; cg < cardRefs.length; cg++) {
+          if ((cardRefs[cg].width || cardWidth) > cardWidth + 0.5) { anyCardGrew = true; break; }
+        }
       }
 
       if (!anyCardGrew) {
@@ -3992,7 +4003,7 @@ async function buildPropertiesSheetSection(parent: FrameNode, node: SceneNode, s
       }
 
       for (var ci = 0; ci < cardRefs.length; ci++) {
-        var grew = (cardRefs[ci].width || cardWidth) > cardWidth + 0.5;
+        var grew = !useGrid && (cardRefs[ci].width || cardWidth) > cardWidth + 0.5;
         if (!grew) {
           try { (cardRefs[ci] as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
         }

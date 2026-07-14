@@ -1985,10 +1985,12 @@
       }
       section.appendChild(grid);
       var anyCardGrew = false;
-      for (var cg = 0; cg < cardRefs.length; cg++) {
-        if ((cardRefs[cg].width || cardWidth) > cardWidth + 0.5) {
-          anyCardGrew = true;
-          break;
+      if (!useGrid) {
+        for (var cg = 0; cg < cardRefs.length; cg++) {
+          if ((cardRefs[cg].width || cardWidth) > cardWidth + 0.5) {
+            anyCardGrew = true;
+            break;
+          }
         }
       }
       if (!anyCardGrew) {
@@ -1998,7 +2000,7 @@
         }
       }
       for (var ci = 0; ci < cardRefs.length; ci++) {
-        var grew = (cardRefs[ci].width || cardWidth) > cardWidth + 0.5;
+        var grew = !useGrid && (cardRefs[ci].width || cardWidth) > cardWidth + 0.5;
         if (!grew) {
           try {
             cardRefs[ci].layoutSizingHorizontal = "FILL";
