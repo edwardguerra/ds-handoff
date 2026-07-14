@@ -5941,6 +5941,23 @@ async function resyncSheetInPlace(sheet: FrameNode, source: SceneNode): Promise<
   propagateResolvedVariableModes(sheet, source);
   var stateTarget = await findStateTargetAsync(source);
 
+  // A FILL child requires its parent to actually be in FIXED sizing mode —
+  // if the sheet's own counterAxisSizingMode isn't FIXED (e.g. it reverted
+  // to HUG at some point, or predates finalizeSheetWidth setting this),
+  // every section.layoutSizingHorizontal='FILL' assignment below silently
+  // fails (caught, swallowed) and sections stay stuck at HUG regardless of
+  // how correct the assignment code is. Fix the MODE here without touching
+  // the WIDTH — the user's intentional resize (point 3 above) stays exactly
+  // as they left it; only the sizing behavior is corrected so it still
+  // resolves to a real, fixed number instead of "hug to content".
+  try {
+    if (sheet.counterAxisSizingMode !== 'FIXED') {
+      var preservedWidth = sheet.width;
+      sheet.counterAxisSizingMode = 'FIXED';
+      sheet.resizeWithoutConstraints(preservedWidth, sheet.height || 1);
+    }
+  } catch (e) {}
+
   var existing: FrameNode[] = [];
   for (var i = 0; i < sheet.children.length; i++) {
     var child = sheet.children[i] as any;
@@ -6025,8 +6042,22 @@ async function resyncSectionInPlace(oldSection: FrameNode, source: SceneNode): P
   }
   oldSection.remove();
 
-  if (parent.layoutMode && parent.layoutMode !== 'NONE') {
-    // Auto-layout parent: mirror how the old section sat in the flow.
+  // If the parent is still one of our own sheet frames (this section is
+  // simply un-moved, but happened to be resynced individually rather than
+  // via resyncSheetInPlace — e.g. it was selected directly while its sheet
+  // wasn't in scope), always FILL, same as resyncSheetInPlace. "Preserve
+  // whatever it was" is only correct for a section the user actually moved
+  // into a frame of their own — inside our own sheet, blindly copying
+  // forward oldSizingH means a section that was HUG due to a historical
+  // bug (fixed since) stays HUG forever, since every resync just
+  // faithfully re-copies the previous (broken) state.
+  var parentIsOwnSheet = !!(getSheetSourceId(parent) && !getSectionKey(parent));
+
+  if (parentIsOwnSheet && parent.layoutMode && parent.layoutMode !== 'NONE') {
+    try { (fresh as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
+  } else if (parent.layoutMode && parent.layoutMode !== 'NONE') {
+    // Auto-layout parent the user built themselves: mirror how the old
+    // section sat in their flow.
     try {
       (fresh as any).layoutSizingHorizontal = oldSizingH === 'FILL' ? 'FILL' : 'FIXED';
     } catch (e) {}

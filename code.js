@@ -3622,6 +3622,14 @@
   async function resyncSheetInPlace(sheet, source) {
     propagateResolvedVariableModes(sheet, source);
     var stateTarget = await findStateTargetAsync(source);
+    try {
+      if (sheet.counterAxisSizingMode !== "FIXED") {
+        var preservedWidth = sheet.width;
+        sheet.counterAxisSizingMode = "FIXED";
+        sheet.resizeWithoutConstraints(preservedWidth, sheet.height || 1);
+      }
+    } catch (e) {
+    }
     var existing = [];
     for (var i = 0; i < sheet.children.length; i++) {
       var child = sheet.children[i];
@@ -3699,7 +3707,13 @@
       parent.appendChild(fresh);
     }
     oldSection.remove();
-    if (parent.layoutMode && parent.layoutMode !== "NONE") {
+    var parentIsOwnSheet = !!(getSheetSourceId(parent) && !getSectionKey(parent));
+    if (parentIsOwnSheet && parent.layoutMode && parent.layoutMode !== "NONE") {
+      try {
+        fresh.layoutSizingHorizontal = "FILL";
+      } catch (e) {
+      }
+    } else if (parent.layoutMode && parent.layoutMode !== "NONE") {
       try {
         fresh.layoutSizingHorizontal = oldSizingH === "FILL" ? "FILL" : "FIXED";
       } catch (e) {
