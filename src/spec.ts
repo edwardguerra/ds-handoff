@@ -1814,17 +1814,33 @@ function centerNodeInPanel(node: SceneNode, panel: FrameNode, maxWidth: number, 
   var w = (node as any).width || 1;
   var h = (node as any).height || 1;
   if (allowScale === false) {
-    // 28px, not 16: callers like buildLayoutSheetSection draw padding/gap
-    // guide labels after this returns, positioned outside the clone's own
-    // bounding box (e.g. a "Top" padding label sits above it) — with too
-    // tight a margin here those labels land right at (or past) the panel
-    // edge clipsContent now enforces.
-    var padX = 28;
-    var padY = 28;
+    // Two different margins, deliberately not the same number:
+    //
+    // padX/padY (16) decides WHETHER the panel needs to grow at all — kept
+    // at the original tight value so components that fit comfortably at
+    // the FILL-target width (columnWidth/cardWidth) are never flagged as
+    // "grew". Callers (buildLayoutSheetSection, appendPropertyGroup) skip
+    // FILL sizing entirely for anything that grew, so an inflated threshold
+    // here means moderate-width components falsely skip FILL and get
+    // stuck at a fixed width — exactly the "hug instead of fill" bug this
+    // produced when both margins were the same 28px value.
+    //
+    // growPadX/growPadY (28) is the margin actually applied ONCE growth is
+    // triggered — generous enough that callers like buildLayoutSheetSection
+    // drawing padding/gap guide labels after this returns (positioned
+    // outside the clone's own bounding box) have room, without a tight
+    // margin landing those labels right at the panel edge clipsContent now
+    // enforces.
+    var padX = 16;
+    var padY = 16;
     var requiredWidth = w + padX * 2;
     var requiredHeight = h + padY * 2;
     if ((panel as any).width < requiredWidth || (panel as any).height < requiredHeight) {
-      panel.resize(Math.max((panel as any).width || 0, requiredWidth), Math.max((panel as any).height || 0, requiredHeight));
+      var growPadX = 28;
+      var growPadY = 28;
+      var growWidth = w + growPadX * 2;
+      var growHeight = h + growPadY * 2;
+      panel.resize(Math.max((panel as any).width || 0, growWidth), Math.max((panel as any).height || 0, growHeight));
       maxWidth = (panel as any).width || maxWidth;
       maxHeight = (panel as any).height || maxHeight;
     }

@@ -350,12 +350,16 @@
     var w = node.width || 1;
     var h = node.height || 1;
     if (allowScale === false) {
-      var padX = 28;
-      var padY = 28;
+      var padX = 16;
+      var padY = 16;
       var requiredWidth = w + padX * 2;
       var requiredHeight = h + padY * 2;
       if (panel.width < requiredWidth || panel.height < requiredHeight) {
-        panel.resize(Math.max(panel.width || 0, requiredWidth), Math.max(panel.height || 0, requiredHeight));
+        var growPadX = 28;
+        var growPadY = 28;
+        var growWidth = w + growPadX * 2;
+        var growHeight = h + growPadY * 2;
+        panel.resize(Math.max(panel.width || 0, growWidth), Math.max(panel.height || 0, growHeight));
         maxWidth = panel.width || maxWidth;
         maxHeight = panel.height || maxHeight;
       }
