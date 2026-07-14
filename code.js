@@ -2805,6 +2805,461 @@
     }
     parent.appendChild(section);
   }
+  var COLOR_PASS = { r: 0.09, g: 0.58, b: 0.32 };
+  var COLOR_WARN = { r: 0.85, g: 0.56, b: 0.05 };
+  var COLOR_FAIL = { r: 0.82, g: 0.16, b: 0.16 };
+  var COLOR_NA = { r: 0.6, g: 0.6, b: 0.6 };
+  var A11Y_INTERACTIVE_NAME = /(button|btn|link|input|check|radio|switch|toggle|chip|tab|icon|close|action|control)/i;
+  var DEFAULT_LAYER_NAME = /^(Frame|Group|Rectangle|Ellipse|Vector|Line|Polygon|Star|Text|Component|Instance) \d+$/;
+  function walkVisibleNodes(root, cb) {
+    function rec(n) {
+      if (!n || n.visible === false) return;
+      cb(n);
+      var kids = n.children || [];
+      for (var i = 0; i < kids.length; i++) rec(kids[i]);
+    }
+    rec(root);
+  }
+  function relativeLuminance(c) {
+    function chan(v) {
+      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    }
+    return 0.2126 * chan(c.r) + 0.7152 * chan(c.g) + 0.0722 * chan(c.b);
+  }
+  function contrastRatio(a, b) {
+    var la = relativeLuminance(a);
+    var lb = relativeLuminance(b);
+    var hi = Math.max(la, lb);
+    var lo = Math.min(la, lb);
+    return (hi + 0.05) / (lo + 0.05);
+  }
+  function getFirstSolidFill(n) {
+    try {
+      var fills = n.fills;
+      if (!Array.isArray(fills)) return null;
+      for (var i = 0; i < fills.length; i++) {
+        var f = fills[i];
+        if (f && f.visible !== false && f.type === "SOLID") return f.color;
+      }
+    } catch (e) {
+    }
+    return null;
+  }
+  function getEffectiveBackgroundColor(n) {
+    var p = n.parent;
+    while (p && p.type !== "PAGE") {
+      try {
+        var fills = p.fills;
+        if (Array.isArray(fills)) {
+          for (var i = fills.length - 1; i >= 0; i--) {
+            var f = fills[i];
+            if (f && f.visible !== false && f.type === "SOLID" && (f.opacity === void 0 || f.opacity > 0.5)) {
+              return f.color;
+            }
+          }
+        }
+      } catch (e) {
+      }
+      p = p.parent;
+    }
+    return { r: 1, g: 1, b: 1 };
+  }
+  function rgbToHexLabel(c) {
+    function h(v) {
+      var s = Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).toUpperCase();
+      return s.length === 1 ? "0" + s : s;
+    }
+    return "#" + h(c.r) + h(c.g) + h(c.b);
+  }
+  function isBoldFontStyle(styleName) {
+    return /bold|black|heavy|extrabold|semibold/i.test(styleName || "");
+  }
+  function analyzeAccessibility(node) {
+    var contrast = [];
+    var typography = [];
+    var touch = [];
+    var seenContrast = {};
+    var seenType = {};
+    var hasInteractive = false;
+    var hasText = false;
+    walkVisibleNodes(node, function(n) {
+      if (n.type === "TEXT") {
+        hasText = true;
+        var fg = getFirstSolidFill(n);
+        if (fg) {
+          var bg = getEffectiveBackgroundColor(n);
+          var size = typeof n.fontSize === "number" ? n.fontSize : 0;
+          var styleName = n.fontName && typeof n.fontName === "object" ? n.fontName.style || "" : "";
+          var isLarge = size >= 24 || size >= 18.66 && isBoldFontStyle(styleName);
+          var required = isLarge ? 3 : 4.5;
+          var ratio = contrastRatio(fg, bg);
+          var cKey = rgbToHexLabel(fg) + "/" + rgbToHexLabel(bg) + "/" + required;
+          if (!seenContrast[cKey] && contrast.length < 8) {
+            seenContrast[cKey] = true;
+            contrast.push({
+              label: (n.name || "Text") + " \u2014 " + rgbToHexLabel(fg) + " on " + rgbToHexLabel(bg),
+              fg,
+              bg,
+              ratio,
+              required,
+              pass: ratio >= required
+            });
+          }
+          var family = n.fontName && typeof n.fontName === "object" ? n.fontName.family || "" : "Mixed";
+          var lh = "";
+          try {
+            var lhv = n.lineHeight;
+            if (lhv && typeof lhv === "object" && typeof lhv.value === "number") {
+              lh = lhv.unit === "PERCENT" ? "/" + Math.round(lhv.value) + "%" : "/" + Math.round(lhv.value);
+            } else {
+              lh = "/auto";
+            }
+          } catch (e) {
+          }
+          var styled = typeof n.textStyleId === "string" && n.textStyleId !== "" || !!(n.boundVariables && (n.boundVariables.fontSize || n.boundVariables.fontFamily || n.boundVariables.fontStyle || n.boundVariables.fontWeight));
+          var tKey = family + "|" + styleName + "|" + size;
+          if (!seenType[tKey] && typography.length < 8) {
+            seenType[tKey] = true;
+            typography.push({
+              label: family + " " + styleName,
+              detail: (size ? Math.round(size) : "?") + lh + (styled ? "" : " \u2014 no text style/token"),
+              tooSmall: size > 0 && size < 12,
+              styled
+            });
+          }
+        }
+      }
+      var interactiveByName = A11Y_INTERACTIVE_NAME.test(n.name || "");
+      var interactiveByReaction = false;
+      try {
+        interactiveByReaction = Array.isArray(n.reactions) && n.reactions.length > 0;
+      } catch (e) {
+      }
+      var isCandidate = n === node || (n.type === "INSTANCE" || n.type === "FRAME") && (interactiveByName || interactiveByReaction);
+      if (isCandidate && (interactiveByName || interactiveByReaction || n === node)) {
+        if (n !== node && (interactiveByName || interactiveByReaction)) hasInteractive = true;
+        var w = Math.round(n.width || 0);
+        var h = Math.round(n.height || 0);
+        if (touch.length < 6 && (n !== node || interactiveByName || interactiveByReaction)) {
+          var minSide = Math.min(w, h);
+          touch.push({
+            label: n.name || n.type,
+            w,
+            h,
+            // 44 = Apple HIG / WCAG AAA recommendation; 24 = WCAG 2.2 AA hard minimum.
+            status: minSide >= 44 ? "pass" : minSide >= 24 ? "warn" : "fail"
+          });
+        }
+      }
+    });
+    var contrastAllPass = true;
+    for (var c = 0; c < contrast.length; c++) if (!contrast[c].pass) contrastAllPass = false;
+    var typographyAllOk = true;
+    for (var t = 0; t < typography.length; t++) if (typography[t].tooSmall) typographyAllOk = false;
+    var touchAllOk = true;
+    var touchAnyFail = false;
+    for (var to = 0; to < touch.length; to++) {
+      if (touch[to].status !== "pass") touchAllOk = false;
+      if (touch[to].status === "fail") touchAnyFail = true;
+    }
+    return {
+      contrast,
+      typography,
+      touch,
+      hasText,
+      hasInteractive,
+      contrastAllPass,
+      typographyAllOk,
+      touchAllOk,
+      touchAnyFail
+    };
+  }
+  function makeStatusChip(text, color) {
+    var chip = figma.createFrame();
+    chip.name = SPEC_PREFIX + "Status " + text;
+    chip.layoutMode = "HORIZONTAL";
+    chip.primaryAxisSizingMode = "AUTO";
+    chip.counterAxisSizingMode = "AUTO";
+    chip.paddingLeft = 8;
+    chip.paddingRight = 8;
+    chip.paddingTop = 3;
+    chip.paddingBottom = 3;
+    chip.cornerRadius = 999;
+    chip.fills = solidPaint(color, 0.12);
+    chip.appendChild(makeText(text, 10, FONT_BOLD, color));
+    return chip;
+  }
+  function makeA11yRow(leading, label, detail, chip) {
+    var row = figma.createFrame();
+    row.name = SPEC_PREFIX + "A11y Row [" + label + "]";
+    row.layoutMode = "HORIZONTAL";
+    row.primaryAxisSizingMode = "FIXED";
+    row.counterAxisSizingMode = "AUTO";
+    row.resize(SHEET_INNER_WIDTH - 48, 1);
+    row.itemSpacing = 12;
+    row.counterAxisAlignItems = "CENTER";
+    row.fills = [];
+    row.layoutSizingVertical = "HUG";
+    if (leading) row.appendChild(leading);
+    row.appendChild(makeText(label, 11, FONT_MEDIUM, COLOR_VALUE));
+    var det = makeText(detail, 11, FONT_REGULAR, COLOR_MUTED);
+    row.appendChild(det);
+    try {
+      det.layoutSizingHorizontal = "FILL";
+    } catch (e) {
+    }
+    if (chip) row.appendChild(chip);
+    return row;
+  }
+  function makeContrastSwatch(fg, bg) {
+    var sw = figma.createFrame();
+    sw.name = SPEC_PREFIX + "Contrast Swatch";
+    sw.layoutMode = "NONE";
+    sw.resize(36, 20);
+    sw.cornerRadius = 4;
+    sw.fills = solidPaint(bg);
+    sw.strokes = solidPaint({ r: 0.85, g: 0.85, b: 0.85 });
+    sw.strokeWeight = 1;
+    var dot = figma.createRectangle();
+    dot.resize(12, 12);
+    dot.cornerRadius = 3;
+    dot.fills = solidPaint(fg);
+    sw.appendChild(dot);
+    dot.x = 12;
+    dot.y = 4;
+    return sw;
+  }
+  async function buildAccessibilitySheetSection(parent, node) {
+    var a = analyzeAccessibility(node);
+    var section = makeSectionWrapper("Accessibility");
+    var rows = [];
+    section.appendChild(makeText("Color contrast", 36, FONT_BOLD, COLOR_HEADER));
+    if (a.contrast.length === 0) {
+      section.appendChild(makeText("No solid text fills detected to evaluate.", 11, FONT_REGULAR, COLOR_MUTED));
+    }
+    for (var c = 0; c < a.contrast.length; c++) {
+      var cr = a.contrast[c];
+      var chip = cr.pass ? makeStatusChip("AA PASS", COLOR_PASS) : makeStatusChip("FAIL", COLOR_FAIL);
+      var row = makeA11yRow(
+        makeContrastSwatch(cr.fg, cr.bg),
+        cr.label,
+        Math.round(cr.ratio * 100) / 100 + ":1 (needs " + cr.required + ":1)",
+        chip
+      );
+      section.appendChild(row);
+      rows.push(row);
+    }
+    section.appendChild(makeText("Typography", 36, FONT_BOLD, COLOR_HEADER));
+    if (a.typography.length === 0) {
+      section.appendChild(makeText("No text layers in this component.", 11, FONT_REGULAR, COLOR_MUTED));
+    }
+    for (var t = 0; t < a.typography.length; t++) {
+      var ty = a.typography[t];
+      var tChip = ty.tooSmall ? makeStatusChip("BELOW 12", COLOR_FAIL) : ty.styled ? makeStatusChip("OK", COLOR_PASS) : makeStatusChip("NO TOKEN", COLOR_WARN);
+      var tRow = makeA11yRow(null, ty.label, ty.detail, tChip);
+      section.appendChild(tRow);
+      rows.push(tRow);
+    }
+    section.appendChild(makeText("Touch targets", 36, FONT_BOLD, COLOR_HEADER));
+    if (a.touch.length === 0) {
+      section.appendChild(makeText("No interactive elements detected.", 11, FONT_REGULAR, COLOR_MUTED));
+    }
+    for (var to = 0; to < a.touch.length; to++) {
+      var tt = a.touch[to];
+      var ttChip = tt.status === "pass" ? makeStatusChip("44+ PASS", COLOR_PASS) : tt.status === "warn" ? makeStatusChip("24\u201343", COLOR_WARN) : makeStatusChip("BELOW 24", COLOR_FAIL);
+      var ttRow = makeA11yRow(null, tt.label, tt.w + " \xD7 " + tt.h + " px (44 recommended, 24 minimum)", ttChip);
+      section.appendChild(ttRow);
+      rows.push(ttRow);
+    }
+    parent.appendChild(section);
+    for (var r = 0; r < rows.length; r++) {
+      try {
+        rows[r].layoutSizingHorizontal = "FILL";
+      } catch (e) {
+      }
+    }
+  }
+  function collectReadinessStats(root) {
+    var s = { boundFills: 0, totalFills: 0, boundSpacing: 0, totalSpacing: 0, styledText: 0, totalText: 0, defaultNames: 0, totalNodes: 0 };
+    walkVisibleNodes(root, function(n) {
+      s.totalNodes++;
+      if (DEFAULT_LAYER_NAME.test(n.name || "")) s.defaultNames++;
+      function countPaints(paints, styleId, kind) {
+        if (!Array.isArray(paints)) return;
+        var hasStyle = typeof styleId === "string" && styleId !== "";
+        for (var i = 0; i < paints.length; i++) {
+          var p = paints[i];
+          if (!p || p.visible === false || p.type !== "SOLID") continue;
+          s.totalFills++;
+          if (hasStyle || p.boundVariables && p.boundVariables.color) s.boundFills++;
+        }
+      }
+      try {
+        countPaints(n.fills, n.fillStyleId, "fills");
+      } catch (e) {
+      }
+      try {
+        countPaints(n.strokes, n.strokeStyleId, "strokes");
+      } catch (e) {
+      }
+      var bv = n.boundVariables || {};
+      if (n.layoutMode && n.layoutMode !== "NONE") {
+        var spacingProps = ["paddingLeft", "paddingRight", "paddingTop", "paddingBottom", "itemSpacing"];
+        for (var sp = 0; sp < spacingProps.length; sp++) {
+          var v = n[spacingProps[sp]];
+          if (typeof v === "number" && v > 0) {
+            s.totalSpacing++;
+            if (bv[spacingProps[sp]]) s.boundSpacing++;
+          }
+        }
+      }
+      var radiusProps = ["topLeftRadius", "topRightRadius", "bottomLeftRadius", "bottomRightRadius"];
+      for (var rp = 0; rp < radiusProps.length; rp++) {
+        var rv = n[radiusProps[rp]];
+        if (typeof rv === "number" && rv > 0) {
+          s.totalSpacing++;
+          if (bv[radiusProps[rp]]) s.boundSpacing++;
+        }
+      }
+      if (n.type === "TEXT") {
+        s.totalText++;
+        var styled = typeof n.textStyleId === "string" && n.textStyleId !== "" || !!(bv.fontSize || bv.fontFamily || bv.fontStyle || bv.fontWeight);
+        if (styled) s.styledText++;
+      }
+    });
+    return s;
+  }
+  function ratioStatus(bound, total, passAt, warnAt) {
+    if (total === 0) return "na";
+    var r = bound / total;
+    if (r >= passAt) return "pass";
+    if (r >= warnAt) return "warn";
+    return "fail";
+  }
+  async function buildReadinessSheetSection(parent, node, stateTarget) {
+    var stats = collectReadinessStats(node);
+    var a11y = analyzeAccessibility(node);
+    var checks = [];
+    checks.push({
+      label: "Color tokens",
+      status: ratioStatus(stats.boundFills, stats.totalFills, 0.9, 0.5),
+      detail: stats.totalFills === 0 ? "No solid fills/strokes" : stats.boundFills + "/" + stats.totalFills + " fills & strokes bound to variables or styles",
+      weight: 20
+    });
+    checks.push({
+      label: "Spacing & radius tokens",
+      status: ratioStatus(stats.boundSpacing, stats.totalSpacing, 0.9, 0.5),
+      detail: stats.totalSpacing === 0 ? "No non-zero padding, gaps, or radii" : stats.boundSpacing + "/" + stats.totalSpacing + " padding/gap/radius values bound to variables",
+      weight: 15
+    });
+    checks.push({
+      label: "Typography tokens",
+      status: ratioStatus(stats.styledText, stats.totalText, 0.99, 0.5),
+      detail: stats.totalText === 0 ? "No text layers" : stats.styledText + "/" + stats.totalText + " text layers using a text style or typography variable",
+      weight: 10
+    });
+    var stateCount = stateTarget && stateTarget.states ? stateTarget.states.length : 0;
+    var looksInteractive = a11y.hasInteractive || A11Y_INTERACTIVE_NAME.test(node.name || "");
+    var stateStatus;
+    var stateDetail;
+    if (stateCount >= 3) {
+      stateStatus = "pass";
+      stateDetail = stateCount + " states defined (" + stateTarget.states.join(", ") + ")";
+    } else if (stateCount === 2) {
+      stateStatus = "warn";
+      stateDetail = "Only 2 states \u2014 consider hover, focus, and disabled";
+    } else if (looksInteractive) {
+      stateStatus = "fail";
+      stateDetail = "Interactive component with no state variants";
+    } else {
+      stateStatus = "na";
+      stateDetail = "Not an interactive component";
+    }
+    checks.push({ label: "Interactive states", status: stateStatus, detail: stateDetail, weight: 15 });
+    var rootLayout = node.layoutMode && node.layoutMode !== "NONE";
+    checks.push({
+      label: "Auto layout",
+      status: rootLayout ? "pass" : "fail",
+      detail: rootLayout ? "Root uses auto layout \u2014 resizes predictably" : "Root is not auto layout \u2014 resizing behavior is undefined",
+      weight: 10
+    });
+    var propData = await getPropertyDefinitionsForNodeAsync(node);
+    var propCount = propData && propData.defs ? Object.keys(propData.defs).length : 0;
+    var nameRatio = stats.totalNodes === 0 ? 0 : stats.defaultNames / stats.totalNodes;
+    var structStatus = propCount > 0 && nameRatio < 0.1 ? "pass" : propCount > 0 || nameRatio < 0.3 ? "warn" : "fail";
+    checks.push({
+      label: "Structure & naming",
+      status: structStatus,
+      detail: propCount + " propert" + (propCount === 1 ? "y" : "ies") + " defined, " + stats.defaultNames + " default-named layer(s)",
+      weight: 10
+    });
+    var a11yStatus;
+    if (!a11y.hasText && a11y.touch.length === 0) {
+      a11yStatus = "na";
+    } else if (!a11y.contrastAllPass || a11y.touchAnyFail || !a11y.typographyAllOk) {
+      a11yStatus = "fail";
+    } else if (!a11y.touchAllOk) {
+      a11yStatus = "warn";
+    } else {
+      a11yStatus = "pass";
+    }
+    checks.push({
+      label: "Accessibility",
+      status: a11yStatus,
+      detail: a11yStatus === "na" ? "Nothing to evaluate" : "Contrast " + (a11y.contrastAllPass ? "passing" : "failing") + ", touch targets " + (a11y.touchAllOk ? "passing" : a11y.touchAnyFail ? "failing" : "borderline"),
+      weight: 20
+    });
+    var earned = 0;
+    var possible = 0;
+    for (var i = 0; i < checks.length; i++) {
+      if (checks[i].status === "na") continue;
+      possible += checks[i].weight;
+      if (checks[i].status === "pass") earned += checks[i].weight;
+      else if (checks[i].status === "warn") earned += checks[i].weight * 0.5;
+    }
+    var score = possible === 0 ? 0 : Math.round(earned / possible * 100);
+    var verdict;
+    var verdictColor;
+    if (score >= 90) {
+      verdict = "Ready for handoff";
+      verdictColor = COLOR_PASS;
+    } else if (score >= 75) {
+      verdict = "Nearly ready \u2014 minor gaps";
+      verdictColor = COLOR_WARN;
+    } else if (score >= 50) {
+      verdict = "Needs attention before handoff";
+      verdictColor = COLOR_WARN;
+    } else {
+      verdict = "Not ready for handoff";
+      verdictColor = COLOR_FAIL;
+    }
+    var section = makeSectionWrapper("Handoff readiness");
+    section.appendChild(makeText(score + " / 100", 44, FONT_BOLD, verdictColor));
+    section.appendChild(makeText(verdict, 14, FONT_MEDIUM, verdictColor));
+    section.appendChild(makeText("Weighted across tokens, states, layout, structure, and accessibility. N/A criteria are excluded from the denominator.", 10, FONT_REGULAR, COLOR_MUTED));
+    var divider = makeHorizontalDivider(SHEET_INNER_WIDTH - 48);
+    section.appendChild(divider);
+    try {
+      divider.layoutSizingHorizontal = "FILL";
+    } catch (e) {
+    }
+    var rows = [];
+    for (var k = 0; k < checks.length; k++) {
+      var ck = checks[k];
+      var chipColor = ck.status === "pass" ? COLOR_PASS : ck.status === "warn" ? COLOR_WARN : ck.status === "fail" ? COLOR_FAIL : COLOR_NA;
+      var chipText = ck.status === "pass" ? "PASS" : ck.status === "warn" ? "REVIEW" : ck.status === "fail" ? "FAIL" : "N/A";
+      var row = makeA11yRow(null, ck.label + " (" + ck.weight + ")", ck.detail, makeStatusChip(chipText, chipColor));
+      section.appendChild(row);
+      rows.push(row);
+    }
+    parent.appendChild(section);
+    for (var r = 0; r < rows.length; r++) {
+      try {
+        rows[r].layoutSizingHorizontal = "FILL";
+      } catch (e) {
+      }
+    }
+  }
   async function buildLayoutSheetSection(parent, node) {
     var f = node;
     var mainComp = null;
@@ -3031,6 +3486,18 @@
       await buildVariablesSheetSection(sheet, node);
       stampSectionsFrom(sheet, mark, "variables", node.id);
     }
+    mark = sheet.children.length;
+    await buildAccessibilitySheetSection(sheet, node);
+    stampSectionsFrom(sheet, mark, "a11y", node.id);
+    mark = sheet.children.length;
+    await buildReadinessSheetSection(sheet, node, stateTarget);
+    stampSectionsFrom(sheet, mark, "readiness", node.id);
+    try {
+      sheet.setPluginData("specSectionsGenerated", JSON.stringify(
+        ["hero", "meta", "properties", "a11y", "readiness"].concat(modules.anatomy ? ["anatomy"] : []).concat(modules.spacing || modules.dimensions ? ["layout"] : []).concat(modules.variables ? ["variables"] : [])
+      ));
+    } catch (e) {
+    }
     finalizeSheetWidth(sheet);
     sheet.x = b.x;
     sheet.y = b.y + b.h + 80;
@@ -3065,6 +3532,10 @@
         await buildLayoutSheetSection(temp, source);
       } else if (key === "variables") {
         await buildVariablesSheetSection(temp, source);
+      } else if (key === "a11y") {
+        await buildAccessibilitySheetSection(temp, source);
+      } else if (key === "readiness") {
+        await buildReadinessSheetSection(temp, source, stateTarget);
       }
     } catch (e) {
     }
@@ -3107,12 +3578,44 @@
       } catch (e) {
       }
     }
+    var everGenerated = [];
+    try {
+      everGenerated = JSON.parse(sheet.getPluginData("specSectionsGenerated") || "[]") || [];
+    } catch (e) {
+      everGenerated = [];
+    }
+    var present = {};
+    for (var p = 0; p < sheet.children.length; p++) {
+      var pk = getSectionKey(sheet.children[p]);
+      if (pk) present[pk] = true;
+    }
+    var backfillKeys = ["a11y", "readiness"];
+    for (var b = 0; b < backfillKeys.length; b++) {
+      var bk = backfillKeys[b];
+      if (present[bk] || everGenerated.indexOf(bk) !== -1) continue;
+      var added = await buildSectionByKey(bk, source, stateTarget);
+      if (added) {
+        sheet.appendChild(added);
+        try {
+          added.layoutSizingHorizontal = "FILL";
+        } catch (e) {
+        }
+        present[bk] = true;
+      }
+    }
+    try {
+      var record = {};
+      for (var eg = 0; eg < everGenerated.length; eg++) record[everGenerated[eg]] = true;
+      for (var pr in present) record[pr] = true;
+      sheet.setPluginData("specSectionsGenerated", JSON.stringify(Object.keys(record)));
+    } catch (e) {
+    }
   }
   async function resyncSectionInPlace(oldSection, source) {
     var key = getSectionKey(oldSection);
     var parent = oldSection.parent;
     if (!key || !parent) return false;
-    var stateTarget = key === "properties" ? await findStateTargetAsync(source) : null;
+    var stateTarget = key === "properties" || key === "readiness" ? await findStateTargetAsync(source) : null;
     var index = parent.children ? parent.children.indexOf(oldSection) : -1;
     var oldX = oldSection.x;
     var oldY = oldSection.y;
