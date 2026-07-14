@@ -788,10 +788,15 @@ function createAnatomyOverlay(node: SceneNode, page: PageNode): void {
   legendItems.push({ id: 1, name: node.name || 'Container', type: node.type || 'INSTANCE', isContainer: true });
 
   // Now process child markers with priority placement
+  var markerId = 2; // IDs start at 2 since container is 1; incremented only for children that actually get a marker
   for (var i = 0; i < children.length; i++) {
     var child = children[i] as any;
+    // Bare vector layers (icon paths, decorative shapes) are implementation
+    // detail, not anatomy — numbering them adds noise without documenting
+    // anything meaningful. Their parent (if any) still gets marked normally.
+    if (child.type === 'VECTOR') continue;
     var childB = getNodeBounds(child);
-    var id = i + 2; // IDs start at 2 since container is 1
+    var id = markerId++;
 
     var childCenterX = childB.x + childB.w / 2;
     var childCenterY = childB.y + childB.h / 2;
@@ -1722,14 +1727,14 @@ function makeLightPreviewPanel(width: number, height: number): FrameNode {
   panel.resize(width, height);
   panel.fills = solidPaint(TOKEN_PREVIEW_BG);
   panel.cornerRadius = TOKEN_PREVIEW_RADIUS;
-  // Growth logic elsewhere (centerNodeInPanel's allowScale=false path) sizes
-  // this panel from the cloned content's layout bounds (width/height), which
-  // don't account for effects, shadows, or anything else that can render
-  // outside them — so that growth can under-measure what's actually drawn.
-  // Rather than let a mismatch there silently clip against this panel's
-  // rounded corner, don't clip at all: worst case is a preview that pokes
-  // past its rounded rect, not one invisibly cut off.
-  panel.clipsContent = false;
+  // Clipped: a preview should never show content past its own edge. This
+  // was briefly turned off because growth logic elsewhere could under-size
+  // the panel and clipping would hide that instead of exposing it — but
+  // hiding overflow isn't the fix, sizing the panel correctly is. The real
+  // bug (buildLayoutSheetSection forcing a grown panel back down to FILL,
+  // discarding its growth) is now fixed at the source; if a preview crops
+  // again, that's a sizing bug to fix there, not a reason to stop clipping.
+  panel.clipsContent = true;
   return panel;
 }
 
@@ -1809,8 +1814,13 @@ function centerNodeInPanel(node: SceneNode, panel: FrameNode, maxWidth: number, 
   var w = (node as any).width || 1;
   var h = (node as any).height || 1;
   if (allowScale === false) {
-    var padX = 16;
-    var padY = 16;
+    // 28px, not 16: callers like buildLayoutSheetSection draw padding/gap
+    // guide labels after this returns, positioned outside the clone's own
+    // bounding box (e.g. a "Top" padding label sits above it) — with too
+    // tight a margin here those labels land right at (or past) the panel
+    // edge clipsContent now enforces.
+    var padX = 28;
+    var padY = 28;
     var requiredWidth = w + padX * 2;
     var requiredHeight = h + padY * 2;
     if ((panel as any).width < requiredWidth || (panel as any).height < requiredHeight) {
@@ -2298,6 +2308,11 @@ async function buildAnatomySheetSection(parent: FrameNode, node: SceneNode): Pro
     var lw = layer.width || 0;
     var lh = layer.height || 0;
     if (lw < 2 || lh < 2) continue;
+    // Bare vector layers (icon paths, decorative shapes) are implementation
+    // detail, not anatomy — numbering them adds noise without documenting
+    // anything meaningful. They're leaf nodes, so skipping also means not
+    // enqueueing (nonexistent) children.
+    if (layer.type === 'VECTOR') continue;
 
     var mtype: 'base' | 'base-child' | 'other' = qentry.depth === 1 ? 'base' : 'base-child';
     markers.push({ node: layer, name: layer.name || ('Layer ' + markers.length), type: mtype, bounds: makeBounds(layer) });
@@ -3195,11 +3210,20 @@ async function makeStateCard(
   });
 
   card.appendChild(preview);
-  // Without this, the panel stays pinned at its build-time width even if
-  // the card around it later widens via FILL — leaving a narrow preview
-  // floating inside a wider card. The clone inside re-centers itself via
-  // the CENTER/CENTER constraints set in centerNodeInPanel.
-  try { (preview as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
+  // preview may have grown past `width` in buildStatePreviewNode's
+  // allowScale=false growth (centerNodeInPanel) when the real component
+  // doesn't fit `width`. Setting it to FILL here would immediately snap it
+  // back down to match card (still at `width` at this point) — discarding
+  // that growth and cropping the content clipsContent now enforces. Only
+  // FILL when nothing grew; otherwise widen the card to match instead, so
+  // the caller's cardWidth comparison (below, in appendPropertyGroup) can
+  // detect the growth and skip forcing THIS card back down too.
+  var cardFinalWidth = Math.max(width, preview.width || width);
+  if (cardFinalWidth > width + 0.5) {
+    try { card.resizeWithoutConstraints(cardFinalWidth, card.height || 1); } catch (e) {}
+  } else {
+    try { (preview as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
+  }
   card.appendChild(makeText(title, 30, FONT_BOLD, COLOR_HEADER));
   card.appendChild(makeNodeLabel(stateTarget.targetName, node.type, 11, false));
   card.appendChild(makeText('Property: ' + getPropertyBaseName(spec.propertyKey), 11, FONT_REGULAR, COLOR_VALUE));
@@ -3215,7 +3239,7 @@ async function makeStateCard(
   }
 
   try {
-    card.resizeWithoutConstraints(width, card.height || 1);
+    card.resizeWithoutConstraints(cardFinalWidth, card.height || 1);
   } catch (e) {}
   return card;
 }
@@ -3280,6 +3304,19 @@ async function createPropertyCardsForDefinition(
     var options = Array.isArray(def.variantOptions)
       ? def.variantOptions.filter(function(option: string) { return !!option; })
       : [];
+
+    // A variant that's purely a display number (e.g. a badge "Count":
+    // 1, 2, 3...) should read smallest-to-largest — Figma's stored option
+    // order is insertion order, not numeric order, so "10" can land before
+    // "2". Only applies when every option is numeric; text variants like
+    // Small/Medium/Large keep their original (deliberate) order.
+    var allNumericOptions = options.length > 0 && options.every(function(o: string) {
+      return o.trim() !== '' && isFinite(Number(o));
+    });
+    if (allNumericOptions) {
+      options = options.slice().sort(function(a: string, b: string) { return Number(a) - Number(b); });
+    }
+
     for (var i = 0; i < options.length; i++) {
       var option = options[i];
       cards.push({
@@ -3445,7 +3482,16 @@ function formatGuideValue(value: number): string {
   return '' + Math.round(value);
 }
 
-function drawAutoLayoutGuides(targetClone: any, panel: FrameNode, sourceInfo: any, depth?: number, baseX?: number, baseY?: number, mainCompNode?: any): void {
+function drawAutoLayoutGuides(
+  targetClone: any, panel: FrameNode, sourceInfo: any, depth?: number, baseX?: number, baseY?: number,
+  mainCompNode?: any,
+  // Shared across the whole recursive call tree (created once at depth 0),
+  // so repeated siblings — e.g. 5 identical nav items, each recursed into —
+  // only get their padding/gap VALUE labeled once instead of once per
+  // repeat. The colored regions themselves still draw for every repeat;
+  // only the text (the actual unreadable part) is deduped.
+  seenLabels?: { [key: string]: boolean }
+): void {
   if (!targetClone || !sourceInfo) return;
   var mode = sourceInfo.layoutMode || (sourceInfo.inferredAutoLayout ? sourceInfo.inferredAutoLayout.layoutMode : 'NONE');
   if (!mode || mode === 'NONE') return;
@@ -3453,6 +3499,7 @@ function drawAutoLayoutGuides(targetClone: any, panel: FrameNode, sourceInfo: an
   depth = depth || 0;
   baseX = baseX || 0;
   baseY = baseY || 0;
+  seenLabels = seenLabels || {};
 
   var x = (targetClone.x || 0) + baseX;
   var y = (targetClone.y || 0) + baseY;
@@ -3532,28 +3579,38 @@ function drawAutoLayoutGuides(targetClone: any, panel: FrameNode, sourceInfo: an
     var propKey = PROP_SIDE[side] || '';
     var alias = propKey ? resolveVarAlias(sourceInfo, propKey, undefined, mainCompNode) : '';
     var labelText = alias ? shortTokenName(alias) : formatGuideValue(value);
-    var t = makeGuideLabel(labelText, COLOR_SPACING);
-    t.name = 'Padding-' + side + '-' + value + 'px [Label]';
-    var lw = t.width || 20;
-    var lh = t.height || 14;
-
-    // Position label OUTSIDE the padding rect so it never overlaps the component
-    if (side === 'Top') {
-      t.x = Math.round(rw / 2 - lw / 2);
-      t.y = -(lh + 3);
-    } else if (side === 'Bottom') {
-      t.x = Math.round(rw / 2 - lw / 2);
-      t.y = rh + 3;
-    } else if (side === 'Left') {
-      t.x = -(lw + 4);
-      t.y = Math.round(rh / 2 - lh / 2);
-    } else { // Right
-      t.x = rw + 4;
-      t.y = Math.round(rh / 2 - lh / 2);
-    }
 
     wrapper.appendChild(r);
-    wrapper.appendChild(t);
+
+    // Only label the first occurrence of this exact padding side+value —
+    // repeated siblings (e.g. 5 identical nav items) would otherwise stack
+    // identical text on top of each other. The colored region still draws
+    // every time so coverage stays visible.
+    var padKey = 'pad:' + side + ':' + labelText;
+    if (!seenLabels![padKey]) {
+      seenLabels![padKey] = true;
+      var t = makeGuideLabel(labelText, COLOR_SPACING);
+      t.name = 'Padding-' + side + '-' + value + 'px [Label]';
+      var lw = t.width || 20;
+      var lh = t.height || 14;
+
+      // Position label OUTSIDE the padding rect so it never overlaps the component
+      if (side === 'Top') {
+        t.x = Math.round(rw / 2 - lw / 2);
+        t.y = -(lh + 3);
+      } else if (side === 'Bottom') {
+        t.x = Math.round(rw / 2 - lw / 2);
+        t.y = rh + 3;
+      } else if (side === 'Left') {
+        t.x = -(lw + 4);
+        t.y = Math.round(rh / 2 - lh / 2);
+      } else { // Right
+        t.x = rw + 4;
+        t.y = Math.round(rh / 2 - lh / 2);
+      }
+      wrapper.appendChild(t);
+    }
+
     wrapper.x = rx;
     wrapper.y = ry;
     panel.appendChild(wrapper);
@@ -3589,6 +3646,14 @@ function drawAutoLayoutGuides(targetClone: any, panel: FrameNode, sourceInfo: an
     
     var gapAlias = resolveVarAlias(sourceInfo, 'itemSpacing', undefined, mainCompNode);
     var gapLabelText = gapAlias ? shortTokenName(gapAlias) : formatGuideValue(spacing);
+    // Every gap in one auto-layout container shares the same itemSpacing
+    // value, so without this every pair — and every repeated sibling
+    // container recursed into below — would stack an identical label.
+    // Only the first occurrence gets text; the colored region still marks
+    // every gap.
+    var gapKey = 'gap:' + gapLabelText;
+    var showGapLabel = !seenLabels![gapKey];
+    seenLabels![gapKey] = true;
 
     if (mode === 'HORIZONTAL') {
       var x1 = (a.x || 0) + (a.width || 0);
@@ -3615,13 +3680,14 @@ function drawAutoLayoutGuides(targetClone: any, panel: FrameNode, sourceInfo: an
         gapRect.x = 0;
         gapRect.y = 0;
 
-        var label = makeGuideLabel(gapLabelText, COLOR_ORANGE);
-        label.name = 'Item-Spacing-Gap-' + spacing + 'px [Label]';
-        label.x = Math.max(0, Math.round(gapWidth / 2 - (label.width || 0) / 2));
-        label.y = gapHeight + 4;
-
         gapFrame.appendChild(gapRect);
-        gapFrame.appendChild(label);
+        if (showGapLabel) {
+          var label = makeGuideLabel(gapLabelText, COLOR_ORANGE);
+          label.name = 'Item-Spacing-Gap-' + spacing + 'px [Label]';
+          label.x = Math.max(0, Math.round(gapWidth / 2 - (label.width || 0) / 2));
+          label.y = gapHeight + 4;
+          gapFrame.appendChild(label);
+        }
         gapFrame.x = x + x1;
         gapFrame.y = y + topY;
         panel.appendChild(gapFrame);
@@ -3655,13 +3721,14 @@ function drawAutoLayoutGuides(targetClone: any, panel: FrameNode, sourceInfo: an
         gapRect.x = 0;
         gapRect.y = 0;
 
-        var label = makeGuideLabel(gapLabelText, COLOR_ORANGE);
-        label.name = 'Item-Spacing-Gap-' + spacing + 'px [Label]';
-        label.x = -Math.round((label.width || 0) + 8);
-        label.y = Math.max(0, Math.round(gapHeight / 2 - (label.height || 0) / 2));
-
         gapFrame.appendChild(gapRect);
-        gapFrame.appendChild(label);
+        if (showGapLabel) {
+          var label = makeGuideLabel(gapLabelText, COLOR_ORANGE);
+          label.name = 'Item-Spacing-Gap-' + spacing + 'px [Label]';
+          label.x = -Math.round((label.width || 0) + 8);
+          label.y = Math.max(0, Math.round(gapHeight / 2 - (label.height || 0) / 2));
+          gapFrame.appendChild(label);
+        }
         gapFrame.x = x + leftX;
         gapFrame.y = y + y1;
         panel.appendChild(gapFrame);
@@ -3680,7 +3747,7 @@ function drawAutoLayoutGuides(targetClone: any, panel: FrameNode, sourceInfo: an
       var childMode = child.layoutMode || (child.inferredAutoLayout ? child.inferredAutoLayout.layoutMode : 'NONE');
       if (childMode && childMode !== 'NONE') {
         // Pass accumulated position so nested gaps align correctly
-        drawAutoLayoutGuides(child, panel, child, depth + 1, x, y);
+        drawAutoLayoutGuides(child, panel, child, depth + 1, x, y, mainCompNode, seenLabels);
       }
     }
   }
@@ -3909,14 +3976,26 @@ async function buildPropertiesSheetSection(parent: FrameNode, node: SceneNode, s
 
       section.appendChild(grid);
 
-      try {
-        (grid as any).layoutSizingHorizontal = 'FILL';
-      } catch (e) {}
+      // A card whose preview genuinely grew past cardWidth (real component
+      // doesn't fit) must keep its natural width — FILL would snap it back
+      // down to its evenly-split share and crop it. If any card grew, the
+      // grid itself is also left un-FILLed so it hugs its true (wider)
+      // content instead of being force-shrunk to the section's width;
+      // finalizeSheetWidth then grows the whole sheet to match.
+      var anyCardGrew = false;
+      for (var cg = 0; cg < cardRefs.length; cg++) {
+        if ((cardRefs[cg].width || cardWidth) > cardWidth + 0.5) { anyCardGrew = true; break; }
+      }
 
-      // Set once grid's own FILL relationship to section is established —
-      // top-down, not the reverse, matching finalizeSheetWidth's pattern.
+      if (!anyCardGrew) {
+        try { (grid as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
+      }
+
       for (var ci = 0; ci < cardRefs.length; ci++) {
-        try { (cardRefs[ci] as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
+        var grew = (cardRefs[ci].width || cardWidth) > cardWidth + 0.5;
+        if (!grew) {
+          try { (cardRefs[ci] as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
+        }
       }
   }
 
@@ -5156,22 +5235,24 @@ function makeA11yRow(leading: SceneNode | null, label: string, detail: string, c
   return row;
 }
 
+// Shows the actual pairing — "Aa" set in the foreground color on a swatch
+// of the background color — instead of an abstract swatch+dot, matching
+// how contrast-checker tools typically present a live sample.
 function makeContrastSwatch(fg: RGB, bg: RGB): FrameNode {
   var sw = figma.createFrame();
   sw.name = SPEC_PREFIX + 'Contrast Swatch';
-  sw.layoutMode = 'NONE';
-  sw.resize(36, 20);
+  sw.layoutMode = 'HORIZONTAL';
+  sw.primaryAxisAlignItems = 'CENTER';
+  sw.counterAxisAlignItems = 'CENTER';
+  sw.primaryAxisSizingMode = 'FIXED';
+  sw.counterAxisSizingMode = 'FIXED';
+  sw.resize(40, 28);
   sw.cornerRadius = 4;
   sw.fills = solidPaint(bg);
   sw.strokes = solidPaint({ r: 0.85, g: 0.85, b: 0.85 });
   sw.strokeWeight = 1;
-  var dot = figma.createRectangle();
-  dot.resize(12, 12);
-  dot.cornerRadius = 3;
-  dot.fills = solidPaint(fg);
-  sw.appendChild(dot);
-  dot.x = 12;
-  dot.y = 4;
+  var sample = makeText('Aa', 15, FONT_BOLD, fg);
+  sw.appendChild(sample);
   return sw;
 }
 
@@ -5477,12 +5558,25 @@ async function buildLayoutSheetSection(parent: FrameNode, node: SceneNode): Prom
   if ((leftClone.y || 0) < GRID_CLEAR) leftClone.y = GRID_CLEAR;
   drawAutoLayoutGuides(leftClone, leftPreview, f, 0, 0, 0, mainComp);
 
-  // Adjust panel height: component top + height + 60px bottom breathing room
+  // Adjust panel height: component top + height + 60px bottom breathing room.
+  // Width uses whatever the panel already grew to above (allowScale=false
+  // in centerNodeInPanel widens it when the real component doesn't fit
+  // columnWidth) — resizing back down to columnWidth here would silently
+  // undo that growth and crop the content clipping is about to re-enable.
   var leftH = leftClone.height || 0;
   var leftY = leftClone.y || 0;
   var requiredLeftHeight = Math.max(240, leftY + leftH + 60);
-  leftPreview.resize(columnWidth, requiredLeftHeight);
-  
+  var leftGrew = (leftPreview.width || columnWidth) > columnWidth + 0.5;
+  leftPreview.resize(Math.max(columnWidth, leftPreview.width || columnWidth), requiredLeftHeight);
+  // left has counterAxisSizingMode='FIXED', so it won't auto-hug a wider
+  // child — without this it'd stay at columnWidth while leftPreview sits
+  // wider inside it (clipsContent=false means it wouldn't be clipped, but
+  // finalizeSheetWidth reads left/row/section .width, not leftPreview's,
+  // so the sheet still wouldn't grow to actually fit it).
+  if (leftGrew) {
+    try { left.resizeWithoutConstraints(leftPreview.width, left.height || 1); } catch (e) {}
+  }
+
   left.appendChild(leftPreview);
   var leftLabel = makeNodeLabel(node.name, node.type, 12, true);
   leftLabel.name = SPEC_PREFIX + 'Node Label [' + node.name + ']';
@@ -5534,8 +5628,12 @@ async function buildLayoutSheetSection(parent: FrameNode, node: SceneNode): Prom
   var rightH = rightClone.height || 0;
   var rightY = rightClone.y || 0;
   var requiredRightHeight = Math.max(240, rightY + rightH + 60);
-  rightPreview.resize(columnWidth, requiredRightHeight);
-  
+  var rightGrew = (rightPreview.width || columnWidth) > columnWidth + 0.5;
+  rightPreview.resize(Math.max(columnWidth, rightPreview.width || columnWidth), requiredRightHeight);
+  if (rightGrew) {
+    try { right.resizeWithoutConstraints(rightPreview.width, right.height || 1); } catch (e) {}
+  }
+
   right.appendChild(rightPreview);
   var rightLabel = makeNodeLabel(node.name, node.type, 12, true);
   rightLabel.name = SPEC_PREFIX + 'Node Label [' + node.name + ']';
@@ -5607,11 +5705,27 @@ async function buildLayoutSheetSection(parent: FrameNode, node: SceneNode): Prom
   // Real FILL sizing, cascading row → columns → preview panels, so this
   // section actually tracks the sheet if it's resized later instead of
   // sitting at whatever fixed columnWidth it was generated with.
-  try { row.layoutSizingHorizontal = 'FILL'; } catch (e) {}
-  try { (left as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
-  try { (right as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
-  try { (leftPreview as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
-  try { (rightPreview as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
+  //
+  // BUT: a column whose preview genuinely grew past columnWidth (the real
+  // component doesn't fit) must NOT be forced to FILL — FILL would snap it
+  // straight back down to the (smaller) FILL-allotted share, discarding
+  // the growth and cropping the content clipsContent is about to enforce.
+  // Left at its natural width instead, finalizeSheetWidth (which runs
+  // after this section returns, scanning real .width across sections)
+  // picks up the true requirement and grows the whole sheet to match — the
+  // sheet widens for content that needs it rather than the content
+  // shrinking to fit an assumed width.
+  if (!leftGrew) {
+    try { (left as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
+    try { (leftPreview as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
+  }
+  if (!rightGrew) {
+    try { (right as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
+    try { (rightPreview as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
+  }
+  if (!leftGrew && !rightGrew) {
+    try { row.layoutSizingHorizontal = 'FILL'; } catch (e) {}
+  }
 
   parent.appendChild(section);
 }

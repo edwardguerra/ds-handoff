@@ -287,7 +287,7 @@
     panel.resize(width, height);
     panel.fills = solidPaint(TOKEN_PREVIEW_BG);
     panel.cornerRadius = TOKEN_PREVIEW_RADIUS;
-    panel.clipsContent = false;
+    panel.clipsContent = true;
     return panel;
   }
   async function makePreviewSourceNode(node) {
@@ -350,8 +350,8 @@
     var w = node.width || 1;
     var h = node.height || 1;
     if (allowScale === false) {
-      var padX = 16;
-      var padY = 16;
+      var padX = 28;
+      var padY = 28;
       var requiredWidth = w + padX * 2;
       var requiredHeight = h + padY * 2;
       if (panel.width < requiredWidth || panel.height < requiredHeight) {
@@ -654,6 +654,7 @@
       var lw = layer.width || 0;
       var lh = layer.height || 0;
       if (lw < 2 || lh < 2) continue;
+      if (layer.type === "VECTOR") continue;
       var mtype = qentry.depth === 1 ? "base" : "base-child";
       markers.push({ node: layer, name: layer.name || "Layer " + markers.length, type: mtype, bounds: makeBounds(layer) });
       if (qentry.depth < 2 && layer.children) {
@@ -1407,9 +1408,17 @@
       return getPropertyVariableRefUniqueKey(a).localeCompare(getPropertyVariableRefUniqueKey(b));
     });
     card.appendChild(preview);
-    try {
-      preview.layoutSizingHorizontal = "FILL";
-    } catch (e) {
+    var cardFinalWidth = Math.max(width, preview.width || width);
+    if (cardFinalWidth > width + 0.5) {
+      try {
+        card.resizeWithoutConstraints(cardFinalWidth, card.height || 1);
+      } catch (e) {
+      }
+    } else {
+      try {
+        preview.layoutSizingHorizontal = "FILL";
+      } catch (e) {
+      }
     }
     card.appendChild(makeText(title, 30, FONT_BOLD, COLOR_HEADER));
     card.appendChild(makeNodeLabel(stateTarget.targetName, node.type, 11, false));
@@ -1424,7 +1433,7 @@
       card.appendChild(makeText(spec.metaLines[i], 10, FONT_REGULAR, COLOR_MUTED));
     }
     try {
-      card.resizeWithoutConstraints(width, card.height || 1);
+      card.resizeWithoutConstraints(cardFinalWidth, card.height || 1);
     } catch (e) {
     }
     return card;
@@ -1470,6 +1479,14 @@
       var options = Array.isArray(def.variantOptions) ? def.variantOptions.filter(function(option2) {
         return !!option2;
       }) : [];
+      var allNumericOptions = options.length > 0 && options.every(function(o) {
+        return o.trim() !== "" && isFinite(Number(o));
+      });
+      if (allNumericOptions) {
+        options = options.slice().sort(function(a, b) {
+          return Number(a) - Number(b);
+        });
+      }
       for (var i = 0; i < options.length; i++) {
         var option = options[i];
         cards.push({
@@ -1613,13 +1630,14 @@
     if (!isFinite(value)) return "0";
     return "" + Math.round(value);
   }
-  function drawAutoLayoutGuides(targetClone, panel, sourceInfo, depth, baseX, baseY, mainCompNode) {
+  function drawAutoLayoutGuides(targetClone, panel, sourceInfo, depth, baseX, baseY, mainCompNode, seenLabels) {
     if (!targetClone || !sourceInfo) return;
     var mode = sourceInfo.layoutMode || (sourceInfo.inferredAutoLayout ? sourceInfo.inferredAutoLayout.layoutMode : "NONE");
     if (!mode || mode === "NONE") return;
     depth = depth || 0;
     baseX = baseX || 0;
     baseY = baseY || 0;
+    seenLabels = seenLabels || {};
     var x = (targetClone.x || 0) + baseX;
     var y = (targetClone.y || 0) + baseY;
     var w = targetClone.width || 0;
@@ -1684,25 +1702,29 @@
       var propKey = PROP_SIDE[side] || "";
       var alias = propKey ? resolveVarAlias(sourceInfo, propKey, void 0, mainCompNode) : "";
       var labelText = alias ? shortTokenName(alias) : formatGuideValue(value);
-      var t = makeGuideLabel(labelText, COLOR_SPACING);
-      t.name = "Padding-" + side + "-" + value + "px [Label]";
-      var lw = t.width || 20;
-      var lh = t.height || 14;
-      if (side === "Top") {
-        t.x = Math.round(rw / 2 - lw / 2);
-        t.y = -(lh + 3);
-      } else if (side === "Bottom") {
-        t.x = Math.round(rw / 2 - lw / 2);
-        t.y = rh + 3;
-      } else if (side === "Left") {
-        t.x = -(lw + 4);
-        t.y = Math.round(rh / 2 - lh / 2);
-      } else {
-        t.x = rw + 4;
-        t.y = Math.round(rh / 2 - lh / 2);
-      }
       wrapper.appendChild(r);
-      wrapper.appendChild(t);
+      var padKey = "pad:" + side + ":" + labelText;
+      if (!seenLabels[padKey]) {
+        seenLabels[padKey] = true;
+        var t = makeGuideLabel(labelText, COLOR_SPACING);
+        t.name = "Padding-" + side + "-" + value + "px [Label]";
+        var lw = t.width || 20;
+        var lh = t.height || 14;
+        if (side === "Top") {
+          t.x = Math.round(rw / 2 - lw / 2);
+          t.y = -(lh + 3);
+        } else if (side === "Bottom") {
+          t.x = Math.round(rw / 2 - lw / 2);
+          t.y = rh + 3;
+        } else if (side === "Left") {
+          t.x = -(lw + 4);
+          t.y = Math.round(rh / 2 - lh / 2);
+        } else {
+          t.x = rw + 4;
+          t.y = Math.round(rh / 2 - lh / 2);
+        }
+        wrapper.appendChild(t);
+      }
       wrapper.x = rx;
       wrapper.y = ry;
       panel.appendChild(wrapper);
@@ -1728,6 +1750,9 @@
       var b = visibleChildren[idx + 1];
       var gapAlias = resolveVarAlias(sourceInfo, "itemSpacing", void 0, mainCompNode);
       var gapLabelText = gapAlias ? shortTokenName(gapAlias) : formatGuideValue(spacing);
+      var gapKey = "gap:" + gapLabelText;
+      var showGapLabel = !seenLabels[gapKey];
+      seenLabels[gapKey] = true;
       if (mode === "HORIZONTAL") {
         var x1 = (a.x || 0) + (a.width || 0);
         var x2 = b.x || 0;
@@ -1750,12 +1775,14 @@
           gapRect.resize(gapWidth, gapHeight);
           gapRect.x = 0;
           gapRect.y = 0;
-          var label = makeGuideLabel(gapLabelText, COLOR_ORANGE);
-          label.name = "Item-Spacing-Gap-" + spacing + "px [Label]";
-          label.x = Math.max(0, Math.round(gapWidth / 2 - (label.width || 0) / 2));
-          label.y = gapHeight + 4;
           gapFrame.appendChild(gapRect);
-          gapFrame.appendChild(label);
+          if (showGapLabel) {
+            var label = makeGuideLabel(gapLabelText, COLOR_ORANGE);
+            label.name = "Item-Spacing-Gap-" + spacing + "px [Label]";
+            label.x = Math.max(0, Math.round(gapWidth / 2 - (label.width || 0) / 2));
+            label.y = gapHeight + 4;
+            gapFrame.appendChild(label);
+          }
           gapFrame.x = x + x1;
           gapFrame.y = y + topY;
           panel.appendChild(gapFrame);
@@ -1786,12 +1813,14 @@
           gapRect.resize(gapWidth, gapHeight);
           gapRect.x = 0;
           gapRect.y = 0;
-          var label = makeGuideLabel(gapLabelText, COLOR_ORANGE);
-          label.name = "Item-Spacing-Gap-" + spacing + "px [Label]";
-          label.x = -Math.round((label.width || 0) + 8);
-          label.y = Math.max(0, Math.round(gapHeight / 2 - (label.height || 0) / 2));
           gapFrame.appendChild(gapRect);
-          gapFrame.appendChild(label);
+          if (showGapLabel) {
+            var label = makeGuideLabel(gapLabelText, COLOR_ORANGE);
+            label.name = "Item-Spacing-Gap-" + spacing + "px [Label]";
+            label.x = -Math.round((label.width || 0) + 8);
+            label.y = Math.max(0, Math.round(gapHeight / 2 - (label.height || 0) / 2));
+            gapFrame.appendChild(label);
+          }
           gapFrame.x = x + leftX;
           gapFrame.y = y + y1;
           panel.appendChild(gapFrame);
@@ -1807,7 +1836,7 @@
         var child = visibleChildren[i];
         var childMode = child.layoutMode || (child.inferredAutoLayout ? child.inferredAutoLayout.layoutMode : "NONE");
         if (childMode && childMode !== "NONE") {
-          drawAutoLayoutGuides(child, panel, child, depth + 1, x, y);
+          drawAutoLayoutGuides(child, panel, child, depth + 1, x, y, mainCompNode, seenLabels);
         }
       }
     }
@@ -1955,14 +1984,26 @@
         }
       }
       section.appendChild(grid);
-      try {
-        grid.layoutSizingHorizontal = "FILL";
-      } catch (e) {
+      var anyCardGrew = false;
+      for (var cg = 0; cg < cardRefs.length; cg++) {
+        if ((cardRefs[cg].width || cardWidth) > cardWidth + 0.5) {
+          anyCardGrew = true;
+          break;
+        }
+      }
+      if (!anyCardGrew) {
+        try {
+          grid.layoutSizingHorizontal = "FILL";
+        } catch (e) {
+        }
       }
       for (var ci = 0; ci < cardRefs.length; ci++) {
-        try {
-          cardRefs[ci].layoutSizingHorizontal = "FILL";
-        } catch (e) {
+        var grew = (cardRefs[ci].width || cardWidth) > cardWidth + 0.5;
+        if (!grew) {
+          try {
+            cardRefs[ci].layoutSizingHorizontal = "FILL";
+          } catch (e) {
+          }
         }
       }
     }
@@ -3014,19 +3055,18 @@
   function makeContrastSwatch(fg, bg) {
     var sw = figma.createFrame();
     sw.name = SPEC_PREFIX + "Contrast Swatch";
-    sw.layoutMode = "NONE";
-    sw.resize(36, 20);
+    sw.layoutMode = "HORIZONTAL";
+    sw.primaryAxisAlignItems = "CENTER";
+    sw.counterAxisAlignItems = "CENTER";
+    sw.primaryAxisSizingMode = "FIXED";
+    sw.counterAxisSizingMode = "FIXED";
+    sw.resize(40, 28);
     sw.cornerRadius = 4;
     sw.fills = solidPaint(bg);
     sw.strokes = solidPaint({ r: 0.85, g: 0.85, b: 0.85 });
     sw.strokeWeight = 1;
-    var dot = figma.createRectangle();
-    dot.resize(12, 12);
-    dot.cornerRadius = 3;
-    dot.fills = solidPaint(fg);
-    sw.appendChild(dot);
-    dot.x = 12;
-    dot.y = 4;
+    var sample = makeText("Aa", 15, FONT_BOLD, fg);
+    sw.appendChild(sample);
     return sw;
   }
   async function buildAccessibilitySheetSection(parent, node) {
@@ -3297,7 +3337,14 @@
     var leftH = leftClone.height || 0;
     var leftY = leftClone.y || 0;
     var requiredLeftHeight = Math.max(240, leftY + leftH + 60);
-    leftPreview.resize(columnWidth, requiredLeftHeight);
+    var leftGrew = (leftPreview.width || columnWidth) > columnWidth + 0.5;
+    leftPreview.resize(Math.max(columnWidth, leftPreview.width || columnWidth), requiredLeftHeight);
+    if (leftGrew) {
+      try {
+        left.resizeWithoutConstraints(leftPreview.width, left.height || 1);
+      } catch (e) {
+      }
+    }
     left.appendChild(leftPreview);
     var leftLabel = makeNodeLabel(node.name, node.type, 12, true);
     leftLabel.name = SPEC_PREFIX + "Node Label [" + node.name + "]";
@@ -3341,7 +3388,14 @@
     var rightH = rightClone.height || 0;
     var rightY = rightClone.y || 0;
     var requiredRightHeight = Math.max(240, rightY + rightH + 60);
-    rightPreview.resize(columnWidth, requiredRightHeight);
+    var rightGrew = (rightPreview.width || columnWidth) > columnWidth + 0.5;
+    rightPreview.resize(Math.max(columnWidth, rightPreview.width || columnWidth), requiredRightHeight);
+    if (rightGrew) {
+      try {
+        right.resizeWithoutConstraints(rightPreview.width, right.height || 1);
+      } catch (e) {
+      }
+    }
     right.appendChild(rightPreview);
     var rightLabel = makeNodeLabel(node.name, node.type, 12, true);
     rightLabel.name = SPEC_PREFIX + "Node Label [" + node.name + "]";
@@ -3393,25 +3447,31 @@
     row.appendChild(left);
     row.appendChild(right);
     section.appendChild(row);
-    try {
-      row.layoutSizingHorizontal = "FILL";
-    } catch (e) {
+    if (!leftGrew) {
+      try {
+        left.layoutSizingHorizontal = "FILL";
+      } catch (e) {
+      }
+      try {
+        leftPreview.layoutSizingHorizontal = "FILL";
+      } catch (e) {
+      }
     }
-    try {
-      left.layoutSizingHorizontal = "FILL";
-    } catch (e) {
+    if (!rightGrew) {
+      try {
+        right.layoutSizingHorizontal = "FILL";
+      } catch (e) {
+      }
+      try {
+        rightPreview.layoutSizingHorizontal = "FILL";
+      } catch (e) {
+      }
     }
-    try {
-      right.layoutSizingHorizontal = "FILL";
-    } catch (e) {
-    }
-    try {
-      leftPreview.layoutSizingHorizontal = "FILL";
-    } catch (e) {
-    }
-    try {
-      rightPreview.layoutSizingHorizontal = "FILL";
-    } catch (e) {
+    if (!leftGrew && !rightGrew) {
+      try {
+        row.layoutSizingHorizontal = "FILL";
+      } catch (e) {
+      }
     }
     parent.appendChild(section);
   }
