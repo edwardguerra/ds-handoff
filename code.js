@@ -1557,11 +1557,18 @@
     grid.layoutSizingVertical = "HUG";
     grid.fills = [];
     try {
-      grid.gridColumnSizes[0].type = "FIXED";
-      grid.gridColumnSizes[0].value = width;
-      grid.gridColumnSizes[1].type = "FIXED";
-      grid.gridColumnSizes[1].value = width;
+      grid.gridColumnSizes[0].type = "FLEX";
+      grid.gridColumnSizes[0].value = 1;
+      grid.gridColumnSizes[1].type = "FLEX";
+      grid.gridColumnSizes[1].value = 1;
     } catch (e) {
+      try {
+        grid.gridColumnSizes[0].type = "FIXED";
+        grid.gridColumnSizes[0].value = width;
+        grid.gridColumnSizes[1].type = "FIXED";
+        grid.gridColumnSizes[1].value = width;
+      } catch (e2) {
+      }
     }
     return grid;
   }
@@ -1838,6 +1845,7 @@
       if (!def) continue;
       var propType = normalizeComponentPropertyType(def.type);
       if (propType === "UNKNOWN") continue;
+      if (propType === "TEXT") continue;
       var baseName = getPropertyBaseName(key);
       var currentEntry = currentProps[key] || currentProps[baseName];
       var currentRawValue = def.defaultValue;

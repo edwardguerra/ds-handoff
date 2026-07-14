@@ -3374,12 +3374,24 @@ function createPropertyGroupGrid(columnWidth?: number): FrameNode {
   (grid as any).layoutSizingVertical = 'HUG';
   grid.fills = [];
 
+  // Flexible tracks (1fr each) instead of FIXED pixel widths: the grid is
+  // set to FILL relative to its section after append, so flexible tracks
+  // make the columns split whatever width the grid actually has — tracking
+  // the sheet — rather than freezing at the build-time card width.
   try {
-    grid.gridColumnSizes[0].type = 'FIXED';
-    grid.gridColumnSizes[0].value = width;
-    grid.gridColumnSizes[1].type = 'FIXED';
-    grid.gridColumnSizes[1].value = width;
-  } catch (e) {}
+    (grid.gridColumnSizes[0] as any).type = 'FLEX';
+    (grid.gridColumnSizes[0] as any).value = 1;
+    (grid.gridColumnSizes[1] as any).type = 'FLEX';
+    (grid.gridColumnSizes[1] as any).value = 1;
+  } catch (e) {
+    // FLEX tracks unsupported on this Figma version — fixed widths as before.
+    try {
+      grid.gridColumnSizes[0].type = 'FIXED';
+      grid.gridColumnSizes[0].value = width;
+      grid.gridColumnSizes[1].type = 'FIXED';
+      grid.gridColumnSizes[1].value = width;
+    } catch (e2) {}
+  }
 
   return grid;
 }
@@ -3753,6 +3765,10 @@ async function buildPropertiesSheetSection(parent: FrameNode, node: SceneNode, s
 
     var propType = normalizeComponentPropertyType(def.type);
     if (propType === 'UNKNOWN') continue;
+    // TEXT properties (e.g. a badge's label string) render as near-identical
+    // cards — same preview, different content — and the content itself is
+    // subjective per usage, so it adds noise rather than spec value. Hidden.
+    if (propType === 'TEXT') continue;
 
     var baseName = getPropertyBaseName(key);
     var currentEntry = currentProps[key] || currentProps[baseName];
