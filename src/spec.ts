@@ -2052,11 +2052,39 @@ function finalizeSheetWidth(sheet: FrameNode): void {
 
 function buildModuleLabel(modules: any, hasStateOutput: boolean): string {
   var parts: string[] = [];
+  if (modules.timestamp) parts.push('Timestamp');
   if (modules.anatomy) parts.push('Anatomy');
   if (hasStateOutput) parts.push('States');
   if (modules.variables) parts.push('Variables');
   if (modules.spacing || modules.dimensions) parts.push('Layout');
+  if (modules.accessibility) parts.push('Accessibility');
+  if (modules.readiness) parts.push('Readiness');
   return parts.length > 0 ? ' [' + parts.join(' • ') + ']' : '';
+}
+
+function normalizeSpecModules(modules: any): any {
+  var defaults = {
+    timestamp: true,
+    anatomy: true,
+    spacing: true,
+    dimensions: true,
+    styles: true,
+    componentInstance: true,
+    variables: true,
+    accessibility: true,
+    readiness: true,
+  } as any;
+  if (!modules || typeof modules !== 'object') return defaults;
+  var normalized: any = {};
+  for (var key in defaults) {
+    if (!Object.prototype.hasOwnProperty.call(defaults, key)) continue;
+    if (Object.prototype.hasOwnProperty.call(modules, key)) {
+      normalized[key] = !!modules[key];
+    } else {
+      normalized[key] = defaults[key];
+    }
+  }
+  return normalized;
 }
 
 
@@ -3226,20 +3254,9 @@ async function makeStateCard(
   });
 
   card.appendChild(preview);
-  // preview may have grown past `width` in buildStatePreviewNode's
-  // allowScale=false growth (centerNodeInPanel) when the real component
-  // doesn't fit `width`. Setting it to FILL here would immediately snap it
-  // back down to match card (still at `width` at this point) — discarding
-  // that growth and cropping the content clipsContent now enforces. Only
-  // FILL when nothing grew; otherwise widen the card to match instead, so
-  // the caller's cardWidth comparison (below, in appendPropertyGroup) can
-  // detect the growth and skip forcing THIS card back down too.
+  // Keep property previews responsive to card width updates.
   var cardFinalWidth = Math.max(width, preview.width || width);
-  if (cardFinalWidth > width + 0.5) {
-    try { card.resizeWithoutConstraints(cardFinalWidth, card.height || 1); } catch (e) {}
-  } else {
-    try { (preview as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
-  }
+  try { (preview as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
   card.appendChild(makeText(title, 30, FONT_BOLD, COLOR_HEADER));
   card.appendChild(makeNodeLabel(stateTarget.targetName, node.type, 11, false));
   card.appendChild(makeText('Property: ' + getPropertyBaseName(spec.propertyKey), 11, FONT_REGULAR, COLOR_VALUE));
@@ -3992,37 +4009,10 @@ async function buildPropertiesSheetSection(parent: FrameNode, node: SceneNode, s
 
       section.appendChild(grid);
 
-      // A card whose preview genuinely grew past cardWidth (real component
-      // doesn't fit) must keep its natural width — FILL would snap it back
-      // down to its evenly-split share and crop it. If any card grew, the
-      // grid itself is also left un-FILLed so it hugs its true (wider)
-      // content instead of being force-shrunk to the section's width;
-      // finalizeSheetWidth then grows the whole sheet to match.
-      //
-      // GRID is the exception: a GRID child left without an explicit
-      // layoutSizingHorizontal doesn't place into its own cell correctly —
-      // it can overlap other cards instead of sitting beside them. useGrid
-      // groups (3+ cards) always get FILL, same as before this growth
-      // tracking existed, even though that means an oversized card in a
-      // 3+ group can still crop in rare cases. The plain HORIZONTAL row
-      // (1-2 cards, the common case) doesn't have this constraint and
-      // keeps the growth-aware behavior.
-      var anyCardGrew = false;
-      if (!useGrid) {
-        for (var cg = 0; cg < cardRefs.length; cg++) {
-          if ((cardRefs[cg].width || cardWidth) > cardWidth + 0.5) { anyCardGrew = true; break; }
-        }
-      }
-
-      if (!anyCardGrew) {
-        try { (grid as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
-      }
+      try { (grid as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
 
       for (var ci = 0; ci < cardRefs.length; ci++) {
-        var grew = !useGrid && (cardRefs[ci].width || cardWidth) > cardWidth + 0.5;
-        if (!grew) {
-          try { (cardRefs[ci] as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
-        }
+        try { (cardRefs[ci] as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
       }
   }
 
@@ -5729,30 +5719,11 @@ async function buildLayoutSheetSection(parent: FrameNode, node: SceneNode): Prom
   row.appendChild(right);
   section.appendChild(row);
 
-  // Real FILL sizing, cascading row → columns → preview panels, so this
-  // section actually tracks the sheet if it's resized later instead of
-  // sitting at whatever fixed columnWidth it was generated with.
-  //
-  // BUT: a column whose preview genuinely grew past columnWidth (the real
-  // component doesn't fit) must NOT be forced to FILL — FILL would snap it
-  // straight back down to the (smaller) FILL-allotted share, discarding
-  // the growth and cropping the content clipsContent is about to enforce.
-  // Left at its natural width instead, finalizeSheetWidth (which runs
-  // after this section returns, scanning real .width across sections)
-  // picks up the true requirement and grows the whole sheet to match — the
-  // sheet widens for content that needs it rather than the content
-  // shrinking to fit an assumed width.
-  if (!leftGrew) {
-    try { (left as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
-    try { (leftPreview as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
-  }
-  if (!rightGrew) {
-    try { (right as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
-    try { (rightPreview as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
-  }
-  if (!leftGrew && !rightGrew) {
-    try { row.layoutSizingHorizontal = 'FILL'; } catch (e) {}
-  }
+  try { row.layoutSizingHorizontal = 'FILL'; } catch (e) {}
+  try { (left as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
+  try { (leftPreview as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
+  try { (right as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
+  try { (rightPreview as any).layoutSizingHorizontal = 'FILL'; } catch (e) {}
 
   parent.appendChild(section);
 }
@@ -5799,6 +5770,7 @@ function stampSectionsFrom(sheet: FrameNode, startIndex: number, key: string, so
 }
 
 async function createReferenceStyleSpecSheetAsync(node: SceneNode, page: PageNode, modules: any): Promise<FrameNode> {
+  modules = normalizeSpecModules(modules);
   var b = getNodeBounds(node);
   var stateTarget = await findStateTargetAsync(node);
   var hasStateOutput = !!(stateTarget && stateTarget.states.length > 0);
@@ -5825,8 +5797,10 @@ async function createReferenceStyleSpecSheetAsync(node: SceneNode, page: PageNod
   stampSectionsFrom(sheet, mark, 'hero', node.id);
 
   mark = sheet.children.length;
-  sheet.appendChild(makeMetaSection());
-  stampSectionsFrom(sheet, mark, 'meta', node.id);
+  if (modules.timestamp) {
+    sheet.appendChild(makeMetaSection());
+    stampSectionsFrom(sheet, mark, 'meta', node.id);
+  }
 
   if (modules.anatomy) {
     mark = sheet.children.length;
@@ -5850,23 +5824,30 @@ async function createReferenceStyleSpecSheetAsync(node: SceneNode, page: PageNod
     stampSectionsFrom(sheet, mark, 'variables', node.id);
   }
 
-  mark = sheet.children.length;
-  await buildAccessibilitySheetSection(sheet, node);
-  stampSectionsFrom(sheet, mark, 'a11y', node.id);
+  if (modules.accessibility) {
+    mark = sheet.children.length;
+    await buildAccessibilitySheetSection(sheet, node);
+    stampSectionsFrom(sheet, mark, 'a11y', node.id);
+  }
 
-  mark = sheet.children.length;
-  await buildReadinessSheetSection(sheet, node, stateTarget);
-  stampSectionsFrom(sheet, mark, 'readiness', node.id);
+  if (modules.readiness) {
+    mark = sheet.children.length;
+    await buildReadinessSheetSection(sheet, node, stateTarget);
+    stampSectionsFrom(sheet, mark, 'readiness', node.id);
+  }
 
   // Record which section kinds this sheet has ever had, so resync can tell
   // "section added by a newer plugin version" (backfill it) apart from
   // "section the user deleted" (leave it deleted).
   try {
     sheet.setPluginData('specSectionsGenerated', JSON.stringify(
-      ['hero', 'meta', 'properties', 'a11y', 'readiness']
+      ['hero', 'properties']
+        .concat(modules.timestamp ? ['meta'] : [])
         .concat(modules.anatomy ? ['anatomy'] : [])
         .concat((modules.spacing || modules.dimensions) ? ['layout'] : [])
         .concat(modules.variables ? ['variables'] : [])
+        .concat(modules.accessibility ? ['a11y'] : [])
+        .concat(modules.readiness ? ['readiness'] : [])
     ));
   } catch (e) {}
 
@@ -5937,7 +5918,8 @@ async function buildSectionByKey(key: string, source: SceneNode, stateTarget: St
 // differing from the generated default is an intentional user choice).
 // Sections the user moved out or deleted are simply absent here and are
 // NOT re-created (moved-out ones sync separately, where they now live).
-async function resyncSheetInPlace(sheet: FrameNode, source: SceneNode): Promise<void> {
+async function resyncSheetInPlace(sheet: FrameNode, source: SceneNode, modules: any): Promise<void> {
+  modules = normalizeSpecModules(modules);
   propagateResolvedVariableModes(sheet, source);
   var stateTarget = await findStateTargetAsync(source);
 
@@ -5995,7 +5977,9 @@ async function resyncSheetInPlace(sheet: FrameNode, source: SceneNode): Promise<
     var pk = getSectionKey(sheet.children[p] as any);
     if (pk) present[pk] = true;
   }
-  var backfillKeys = ['a11y', 'readiness'];
+  var backfillKeys = [] as string[];
+  if (modules.accessibility) backfillKeys.push('a11y');
+  if (modules.readiness) backfillKeys.push('readiness');
   for (var b = 0; b < backfillKeys.length; b++) {
     var bk = backfillKeys[b];
     if (present[bk] || everGenerated.indexOf(bk) !== -1) continue;
@@ -6102,7 +6086,7 @@ async function getSelectionStateSummaryAsync(): Promise<{ hasStateTarget: boolea
   };
 }
 
-var STATE_SELECTION_HINT = 'Select a component instance to generate spec documentation.';
+var STATE_SELECTION_HINT = 'Generate component spec documentation';
 
 var NO_STATE_SUMMARY = {
   hasStateTarget: false as false,
@@ -6486,10 +6470,7 @@ export function handleSpecMessage(msg: any): void {
 
     applyUiTokenOverrides(msg.tokens);
 
-    var modules = msg.modules || {
-      anatomy: true, spacing: true, dimensions: true,
-      styles: true, componentInstance: true, variables: true
-    };
+    var modules = normalizeSpecModules(msg.modules);
 
     resolveLocalFonts(selection);
 
@@ -6546,10 +6527,7 @@ export function handleSpecMessage(msg: any): void {
           return;
         }
 
-        var defaultModules = {
-          anatomy: true, spacing: true, dimensions: true,
-          styles: true, componentInstance: true, variables: true
-        };
+        var defaultModules = normalizeSpecModules(null);
 
         // Resolve sources up front; drop orphaned sheets, skip orphaned
         // moved-out sections (they live inside the user's own frames —
@@ -6570,7 +6548,7 @@ export function handleSpecMessage(msg: any): void {
           } catch (e) {
             storedModules = null;
           }
-          sheetJobs.push({ sheet: sheet, source: source as SceneNode, modules: storedModules || msg.modules || defaultModules });
+          sheetJobs.push({ sheet: sheet, source: source as SceneNode, modules: normalizeSpecModules(storedModules || msg.modules || defaultModules) });
         }
 
         var sectionJobs: { section: FrameNode; source: SceneNode }[] = [];
@@ -6609,7 +6587,7 @@ export function handleSpecMessage(msg: any): void {
             // replaced, so its position and any user-adjusted width stay
             // exactly as they are, and sections moved out of the sheet
             // are not re-created inside it.
-            await resyncSheetInPlace(job.sheet, job.source);
+            await resyncSheetInPlace(job.sheet, job.source, job.modules);
           } else {
             // Legacy sheet from before sections carried their own stamps —
             // full rebuild is the only option, restoring position as before.

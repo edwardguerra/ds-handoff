@@ -533,6 +533,30 @@
       }
     }
   }
+  function normalizeSpecModules(modules) {
+    var defaults = {
+      timestamp: true,
+      anatomy: true,
+      spacing: true,
+      dimensions: true,
+      styles: true,
+      componentInstance: true,
+      variables: true,
+      accessibility: true,
+      readiness: true
+    };
+    if (!modules || typeof modules !== "object") return defaults;
+    var normalized = {};
+    for (var key in defaults) {
+      if (!Object.prototype.hasOwnProperty.call(defaults, key)) continue;
+      if (Object.prototype.hasOwnProperty.call(modules, key)) {
+        normalized[key] = !!modules[key];
+      } else {
+        normalized[key] = defaults[key];
+      }
+    }
+    return normalized;
+  }
   function createNumberBadge(num, color) {
     var badge = figma.createFrame();
     badge.layoutMode = "NONE";
@@ -1413,16 +1437,9 @@
     });
     card.appendChild(preview);
     var cardFinalWidth = Math.max(width, preview.width || width);
-    if (cardFinalWidth > width + 0.5) {
-      try {
-        card.resizeWithoutConstraints(cardFinalWidth, card.height || 1);
-      } catch (e) {
-      }
-    } else {
-      try {
-        preview.layoutSizingHorizontal = "FILL";
-      } catch (e) {
-      }
+    try {
+      preview.layoutSizingHorizontal = "FILL";
+    } catch (e) {
     }
     card.appendChild(makeText(title, 30, FONT_BOLD, COLOR_HEADER));
     card.appendChild(makeNodeLabel(stateTarget.targetName, node.type, 11, false));
@@ -1988,28 +2005,14 @@
         }
       }
       section.appendChild(grid);
-      var anyCardGrew = false;
-      if (!useGrid) {
-        for (var cg = 0; cg < cardRefs.length; cg++) {
-          if ((cardRefs[cg].width || cardWidth) > cardWidth + 0.5) {
-            anyCardGrew = true;
-            break;
-          }
-        }
-      }
-      if (!anyCardGrew) {
-        try {
-          grid.layoutSizingHorizontal = "FILL";
-        } catch (e) {
-        }
+      try {
+        grid.layoutSizingHorizontal = "FILL";
+      } catch (e) {
       }
       for (var ci = 0; ci < cardRefs.length; ci++) {
-        var grew = !useGrid && (cardRefs[ci].width || cardWidth) > cardWidth + 0.5;
-        if (!grew) {
-          try {
-            cardRefs[ci].layoutSizingHorizontal = "FILL";
-          } catch (e) {
-          }
+        try {
+          cardRefs[ci].layoutSizingHorizontal = "FILL";
+        } catch (e) {
         }
       }
     }
@@ -3453,31 +3456,25 @@
     row.appendChild(left);
     row.appendChild(right);
     section.appendChild(row);
-    if (!leftGrew) {
-      try {
-        left.layoutSizingHorizontal = "FILL";
-      } catch (e) {
-      }
-      try {
-        leftPreview.layoutSizingHorizontal = "FILL";
-      } catch (e) {
-      }
+    try {
+      row.layoutSizingHorizontal = "FILL";
+    } catch (e) {
     }
-    if (!rightGrew) {
-      try {
-        right.layoutSizingHorizontal = "FILL";
-      } catch (e) {
-      }
-      try {
-        rightPreview.layoutSizingHorizontal = "FILL";
-      } catch (e) {
-      }
+    try {
+      left.layoutSizingHorizontal = "FILL";
+    } catch (e) {
     }
-    if (!leftGrew && !rightGrew) {
-      try {
-        row.layoutSizingHorizontal = "FILL";
-      } catch (e) {
-      }
+    try {
+      leftPreview.layoutSizingHorizontal = "FILL";
+    } catch (e) {
+    }
+    try {
+      right.layoutSizingHorizontal = "FILL";
+    } catch (e) {
+    }
+    try {
+      rightPreview.layoutSizingHorizontal = "FILL";
+    } catch (e) {
     }
     parent.appendChild(section);
   }
@@ -3509,6 +3506,7 @@
     }
   }
   async function createReferenceStyleSpecSheetAsync(node, page, modules) {
+    modules = normalizeSpecModules(modules);
     var b = getNodeBounds(node);
     var stateTarget = await findStateTargetAsync(node);
     var hasStateOutput = !!(stateTarget && stateTarget.states.length > 0);
@@ -3532,8 +3530,10 @@
     sheet.appendChild(hero);
     stampSectionsFrom(sheet, mark, "hero", node.id);
     mark = sheet.children.length;
-    sheet.appendChild(makeMetaSection());
-    stampSectionsFrom(sheet, mark, "meta", node.id);
+    if (modules.timestamp) {
+      sheet.appendChild(makeMetaSection());
+      stampSectionsFrom(sheet, mark, "meta", node.id);
+    }
     if (modules.anatomy) {
       mark = sheet.children.length;
       await buildAnatomySheetSection(sheet, node);
@@ -3552,15 +3552,19 @@
       await buildVariablesSheetSection(sheet, node);
       stampSectionsFrom(sheet, mark, "variables", node.id);
     }
-    mark = sheet.children.length;
-    await buildAccessibilitySheetSection(sheet, node);
-    stampSectionsFrom(sheet, mark, "a11y", node.id);
-    mark = sheet.children.length;
-    await buildReadinessSheetSection(sheet, node, stateTarget);
-    stampSectionsFrom(sheet, mark, "readiness", node.id);
+    if (modules.accessibility) {
+      mark = sheet.children.length;
+      await buildAccessibilitySheetSection(sheet, node);
+      stampSectionsFrom(sheet, mark, "a11y", node.id);
+    }
+    if (modules.readiness) {
+      mark = sheet.children.length;
+      await buildReadinessSheetSection(sheet, node, stateTarget);
+      stampSectionsFrom(sheet, mark, "readiness", node.id);
+    }
     try {
       sheet.setPluginData("specSectionsGenerated", JSON.stringify(
-        ["hero", "meta", "properties", "a11y", "readiness"].concat(modules.anatomy ? ["anatomy"] : []).concat(modules.spacing || modules.dimensions ? ["layout"] : []).concat(modules.variables ? ["variables"] : [])
+        ["hero", "properties"].concat(modules.timestamp ? ["meta"] : []).concat(modules.anatomy ? ["anatomy"] : []).concat(modules.spacing || modules.dimensions ? ["layout"] : []).concat(modules.variables ? ["variables"] : []).concat(modules.accessibility ? ["a11y"] : []).concat(modules.readiness ? ["readiness"] : [])
       ));
     } catch (e) {
     }
@@ -3619,7 +3623,8 @@
     temp.remove();
     return built;
   }
-  async function resyncSheetInPlace(sheet, source) {
+  async function resyncSheetInPlace(sheet, source, modules) {
+    modules = normalizeSpecModules(modules);
     propagateResolvedVariableModes(sheet, source);
     var stateTarget = await findStateTargetAsync(source);
     try {
@@ -3663,7 +3668,9 @@
       var pk = getSectionKey(sheet.children[p]);
       if (pk) present[pk] = true;
     }
-    var backfillKeys = ["a11y", "readiness"];
+    var backfillKeys = [];
+    if (modules.accessibility) backfillKeys.push("a11y");
+    if (modules.readiness) backfillKeys.push("readiness");
     for (var b = 0; b < backfillKeys.length; b++) {
       var bk = backfillKeys[b];
       if (present[bk] || everGenerated.indexOf(bk) !== -1) continue;
@@ -3760,7 +3767,7 @@
       message: STATE_SELECTION_HINT
     };
   }
-  var STATE_SELECTION_HINT = "Select a component instance to generate spec documentation.";
+  var STATE_SELECTION_HINT = "Generate component spec documentation";
   var NO_STATE_SUMMARY = {
     hasStateTarget: false,
     targetName: "",
@@ -4053,14 +4060,7 @@
         return;
       }
       applyUiTokenOverrides(msg.tokens);
-      var modules = msg.modules || {
-        anatomy: true,
-        spacing: true,
-        dimensions: true,
-        styles: true,
-        componentInstance: true,
-        variables: true
-      };
+      var modules = normalizeSpecModules(msg.modules);
       resolveLocalFonts(selection2);
       Promise.all([
         figma.loadFontAsync(FONT_REGULAR),
@@ -4104,14 +4104,7 @@
             figma.ui.postMessage({ type: "error", message: noneMsg });
             return;
           }
-          var defaultModules = {
-            anatomy: true,
-            spacing: true,
-            dimensions: true,
-            styles: true,
-            componentInstance: true,
-            variables: true
-          };
+          var defaultModules = normalizeSpecModules(null);
           var sheetJobs = [];
           var orphans = 0;
           for (var i = 0; i < targets.sheets.length; i++) {
@@ -4128,7 +4121,7 @@
             } catch (e) {
               storedModules = null;
             }
-            sheetJobs.push({ sheet, source, modules: storedModules || msg.modules || defaultModules });
+            sheetJobs.push({ sheet, source, modules: normalizeSpecModules(storedModules || msg.modules || defaultModules) });
           }
           var sectionJobs = [];
           var skippedSections = 0;
@@ -4159,7 +4152,7 @@
           for (var j = 0; j < sheetJobs.length; j++) {
             var job = sheetJobs[j];
             if (sheetHasStampedSections(job.sheet)) {
-              await resyncSheetInPlace(job.sheet, job.source);
+              await resyncSheetInPlace(job.sheet, job.source, job.modules);
             } else {
               var parent = job.sheet.parent;
               var index = parent && parent.children ? parent.children.indexOf(job.sheet) : -1;
@@ -4215,6 +4208,8 @@
   var selection;
   var working;
   var count = 0;
+  var skippedVariableRows = [];
+  var skippedStyleRows = [];
   function sanitizeName(name) {
     if (!name) return name;
     return name.replace(/\//g, ".").trim().toLowerCase();
@@ -4243,7 +4238,7 @@
     return 0;
   }
   var FONT_REGULAR2 = { family: "Inter", style: "Regular" };
-  var FONT_SEMIBOLD = { family: "Inter", style: "Semi Bold" };
+  var FONT_SEMIBOLD = { family: "Inter", style: "Bold" };
   var FONT_ITALIC = { family: "Inter", style: "Italic" };
   var LIGHT = { type: "SOLID", color: hexToRGB("#fcfcfc") };
   var DARK = { type: "SOLID", color: hexToRGB("#313131") };
@@ -4256,22 +4251,77 @@
   var COLOR_DARK_MODE_BG = { type: "SOLID", color: hexToRGB("#000000") };
   var COLOR_DARK_MODE_TEXT = { type: "SOLID", color: hexToRGB("#ffffff") };
   var COLOR_DARK_MODE_BORDER = { type: "SOLID", color: hexToRGB("#cccccc") };
-  var PREVIEW_WIDTH = 96;
-  var PREVIEW_HEIGHT = 75;
-  var SWATCH_SIZE = 32;
-  var LEFT_COLUMN_WIDTH = 696;
-  var MIN_MODE_COLUMN_WIDTH = 450;
   var ROW_PADDING = 16;
-  var BORDER_RADIUS_SM = 6;
-  var GAP_BETWEEN_ROWS = 48;
-  var GAP_PREVIEW_ITEMS = 12;
-  var GAP_SWATCH_ITEMS = 8;
-  var GAP_BETWEEN_SECTIONS = 0;
-  var FONT_SIZE = 24;
-  var L_FONT_SIZE = 40;
+  var FONT_SIZE = 12;
   var CORNER_RADIUS = 16;
-  var MAX_COLUMN_WIDTH = 1440;
+  var tokenFontsResolved = false;
   figma.on("currentpagechange", cancel);
+  function resolveTokenFonts() {
+    if (tokenFontsResolved) return;
+    tokenFontsResolved = true;
+    function weightOf(styleName) {
+      const s = (styleName || "").toLowerCase();
+      if (s.indexOf("thin") >= 0 || s.indexOf("hairline") >= 0) return 100;
+      if (s.indexOf("extra light") >= 0 || s.indexOf("extralight") >= 0 || s.indexOf("ultralight") >= 0) return 200;
+      if (s.indexOf("light") >= 0) return 300;
+      if (s.indexOf("regular") >= 0 || s.indexOf("book") >= 0 || s.indexOf("roman") >= 0 || s.indexOf("normal") >= 0) return 400;
+      if (s.indexOf("medium") >= 0) return 500;
+      if (s.indexOf("semi bold") >= 0 || s.indexOf("semibold") >= 0 || s.indexOf("demi") >= 0) return 600;
+      if (s.indexOf("bold") >= 0) return 700;
+      if (s.indexOf("extra bold") >= 0 || s.indexOf("extrabold") >= 0) return 800;
+      if (s.indexOf("black") >= 0 || s.indexOf("heavy") >= 0) return 900;
+      return 400;
+    }
+    const candidates = [];
+    const seen = {};
+    function addFont(fn) {
+      if (!fn || typeof fn !== "object" || !fn.family || !fn.style) return;
+      const key = fn.family + "|" + fn.style;
+      if (seen[key]) return;
+      seen[key] = true;
+      candidates.push({ family: fn.family, style: fn.style });
+    }
+    try {
+      const localTextStyles = figma.getLocalTextStyles();
+      for (let i = 0; i < localTextStyles.length; i++) addFont(localTextStyles[i].fontName);
+    } catch (e) {
+    }
+    if (!candidates.length) return;
+    function closest(target) {
+      let best = null;
+      let bestDiff = Number.POSITIVE_INFINITY;
+      for (let i = 0; i < candidates.length; i++) {
+        const c = candidates[i];
+        const diff = Math.abs(weightOf(c.style) - target);
+        if (diff < bestDiff) {
+          bestDiff = diff;
+          best = c;
+        }
+      }
+      return best;
+    }
+    const regular = closest(400);
+    const semi = closest(600) || closest(700);
+    const italic = candidates.find((c) => (c.style || "").toLowerCase().indexOf("italic") >= 0);
+    if (regular) FONT_REGULAR2 = regular;
+    if (semi) FONT_SEMIBOLD = semi;
+    if (italic) FONT_ITALIC = italic;
+  }
+  async function ensureTokenFontsLoaded() {
+    resolveTokenFonts();
+    async function safeLoad(target, fallback) {
+      try {
+        await figma.loadFontAsync(target);
+        return target;
+      } catch (e) {
+        await figma.loadFontAsync(fallback);
+        return fallback;
+      }
+    }
+    FONT_REGULAR2 = await safeLoad(FONT_REGULAR2, { family: "Inter", style: "Regular" });
+    FONT_SEMIBOLD = await safeLoad(FONT_SEMIBOLD, FONT_REGULAR2);
+    FONT_ITALIC = await safeLoad(FONT_ITALIC, FONT_REGULAR2);
+  }
   function handleCreateAutoLayout() {
     const selection2 = figma.currentPage.selection;
     if (selection2.length === 0) {
@@ -4310,21 +4360,211 @@
   var activeEffectStyleIds = [];
   var activeLayoutStyleIds = [];
   var activeTextStyleIds = [];
+  var activeCollectionGroupsById = {};
   var mainFrame;
   var TOKENS_DOC_KEY = "dsTokensDoc";
   var TOKENS_CONFIG_KEY = "dsTokensConfig";
-  function findTokensDocFrame() {
+  var TOKENS_DOC_STACK_KEY = "dsTokensDocStack";
+  var TOKENS_SYNC_META_KEY = "dsTokensSyncMeta";
+  function normalizeTokensSyncMode(input) {
+    if (input === "doc-to-variables" || input === "variables-to-doc") return input;
+    return "auto";
+  }
+  function normalizeDescriptionText(value) {
+    const text = String(value || "").trim();
+    return text.toLowerCase() === "no description" ? "" : text;
+  }
+  function hashDescriptionMap(map) {
+    const ids = Object.keys(map).sort();
+    let payload = "";
+    for (let i = 0; i < ids.length; i++) {
+      const id = ids[i];
+      payload += id + "=" + normalizeDescriptionText(map[id]) + "\n";
+    }
+    return String(payload.length) + ":" + payload;
+  }
+  function extractVariableDescriptionsFromDocFrame(docFrame) {
+    const out = {};
+    try {
+      let walk = function(node) {
+        rows.push(node);
+        const kids = node.children;
+        if (!kids || !kids.length) return;
+        for (let i = 0; i < kids.length; i++) walk(kids[i]);
+      };
+      const rows = [];
+      walk(docFrame);
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        if (!row || row.type !== "FRAME") continue;
+        const rowName = String(row.name || "");
+        if (rowName.indexOf("variable-row-") !== 0) continue;
+        const variableId = rowName.substring("variable-row-".length);
+        if (!variableId) continue;
+        let nextDescription = null;
+        const rowChildren = row.children || [];
+        for (let c = 0; c < rowChildren.length; c++) {
+          const cell = rowChildren[c];
+          if (!cell || cell.type !== "FRAME") continue;
+          const cellName = String(cell.name || "");
+          if (cellName === "name-cell") {
+            const textChildren = (cell.children || []).filter((n) => n && n.type === "TEXT");
+            if (textChildren.length > 1) nextDescription = String(textChildren[1].characters || "").trim();
+            else if (textChildren.length === 1) nextDescription = String(textChildren[0].characters || "").trim();
+            break;
+          }
+          if (cellName === "desc-cell") {
+            const textChildren = cell.children || [];
+            for (let t = 0; t < textChildren.length; t++) {
+              const txt = textChildren[t];
+              if (txt && txt.type === "TEXT") {
+                nextDescription = String(txt.characters || "").trim();
+                break;
+              }
+            }
+            break;
+          }
+        }
+        if (nextDescription === null) continue;
+        out[variableId] = normalizeDescriptionText(nextDescription);
+      }
+    } catch (e) {
+    }
+    return out;
+  }
+  function getVariableDescriptionsByIds(ids) {
+    const out = {};
+    for (let i = 0; i < ids.length; i++) {
+      const id = ids[i];
+      try {
+        const v = figma.variables.getVariableById(id);
+        if (!v) continue;
+        out[id] = normalizeDescriptionText(v.description || "");
+      } catch (e) {
+      }
+    }
+    return out;
+  }
+  function readTokensSyncMeta(frame) {
+    try {
+      const raw = frame.getPluginData(TOKENS_SYNC_META_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return null;
+      return parsed;
+    } catch (e) {
+      return null;
+    }
+  }
+  function writeTokensSyncMeta(frame, direction) {
+    try {
+      const docMap = extractVariableDescriptionsFromDocFrame(frame);
+      const ids = Object.keys(docMap);
+      const variableMap = getVariableDescriptionsByIds(ids);
+      const meta = {
+        version: 1,
+        docHash: hashDescriptionMap(docMap),
+        variableHash: hashDescriptionMap(variableMap),
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        direction
+      };
+      frame.setPluginData(TOKENS_SYNC_META_KEY, JSON.stringify(meta));
+    } catch (e) {
+    }
+  }
+  function findTokensDocStack() {
     try {
       var children = figma.currentPage.children || [];
       for (var i = 0; i < children.length; i++) {
         var child = children[i];
-        if (child.type === "FRAME" && child.getPluginData(TOKENS_DOC_KEY) === "1") {
+        if (child.type === "FRAME" && child.getPluginData(TOKENS_DOC_STACK_KEY) === "1") {
           return child;
         }
       }
     } catch (e) {
     }
     return null;
+  }
+  function getSelectedTokensDocFrame() {
+    try {
+      var sel = figma.currentPage.selection || [];
+      for (var i = 0; i < sel.length; i++) {
+        var cursor = sel[i];
+        while (cursor && cursor.type !== "PAGE") {
+          if (cursor.type === "FRAME" && cursor.getPluginData(TOKENS_DOC_KEY) === "1") {
+            return cursor;
+          }
+          cursor = cursor.parent;
+        }
+      }
+    } catch (e) {
+    }
+    return null;
+  }
+  function ensureTokensDocStack() {
+    var stack = findTokensDocStack();
+    if (!stack) {
+      stack = figma.createFrame();
+      stack.name = "Specs-Token Docs";
+      stack.layoutMode = "HORIZONTAL";
+      stack.itemSpacing = 100;
+      stack.paddingLeft = 0;
+      stack.paddingRight = 0;
+      stack.paddingTop = 0;
+      stack.paddingBottom = 0;
+      stack.layoutSizingHorizontal = "HUG";
+      stack.layoutSizingVertical = "HUG";
+      stack.fills = [];
+      stack.setPluginData(TOKENS_DOC_STACK_KEY, "1");
+      var rightmostX = 0;
+      var yTop = 0;
+      var pageChildren = figma.currentPage.children || [];
+      for (var i = 0; i < pageChildren.length; i++) {
+        var n = pageChildren[i];
+        var nr = n.x + n.width;
+        if (nr > rightmostX) rightmostX = nr;
+        if (i === 0 || n.y < yTop) yTop = n.y;
+      }
+      stack.x = rightmostX + 100;
+      stack.y = yTop;
+      figma.currentPage.appendChild(stack);
+    }
+    try {
+      var docs = (figma.currentPage.children || []).filter((n2) => n2.type === "FRAME" && n2.getPluginData(TOKENS_DOC_KEY) === "1");
+      for (var i = 0; i < docs.length; i++) {
+        var doc = docs[i];
+        if (doc.parent === figma.currentPage) {
+          stack.appendChild(doc);
+        }
+      }
+    } catch (e) {
+    }
+    return stack;
+  }
+  function syncVariableDescriptionsFromDocFrame(docFrame) {
+    let updated = 0;
+    try {
+      const docMap = extractVariableDescriptionsFromDocFrame(docFrame);
+      const ids = Object.keys(docMap);
+      for (let i = 0; i < ids.length; i++) {
+        const variableId = ids[i];
+        const variable = figma.variables.getVariableById(variableId);
+        if (!variable) continue;
+        const nextDescription = normalizeDescriptionText(docMap[variableId]);
+        const currentDescription = normalizeDescriptionText(variable.description || "");
+        if (currentDescription === nextDescription) continue;
+        try {
+          variable.description = nextDescription;
+          updated++;
+        } catch (e) {
+        }
+      }
+    } catch (e) {
+    }
+    return updated;
+  }
+  function getTokensResyncState() {
+    return { available: !!getSelectedTokensDocFrame() };
   }
   function propagateSelectedVariableModes(target) {
     try {
@@ -4344,38 +4584,61 @@
   }
   var variablesFrame;
   var stylesFrame;
-  function createMainFrame() {
-    mainFrame = createAutolayout("Variables and Styles", "HORIZONTAL", 100, 0, 0);
+  function getVariableGroupPath(variableName) {
+    if (!variableName) return "";
+    const parts = variableName.split("/").map((p) => p.trim()).filter(Boolean);
+    if (parts.length <= 1) return "";
+    return parts.slice(0, parts.length - 1).join("/");
+  }
+  function buildCollectionGroupSummaries(variables) {
+    const countsByPath = {};
+    for (const v of variables) {
+      const path = getVariableGroupPath(v.name);
+      if (!path) continue;
+      const parts = path.split("/").filter(Boolean);
+      for (let depth = 1; depth <= parts.length; depth++) {
+        const prefix = parts.slice(0, depth).join("/");
+        countsByPath[prefix] = (countsByPath[prefix] || 0) + 1;
+      }
+    }
+    const paths = Object.keys(countsByPath);
+    paths.sort((a, b) => {
+      const ad = a.split("/").length;
+      const bd = b.split("/").length;
+      if (ad !== bd) return ad - bd;
+      return naturalSort(a, b);
+    });
+    return paths.map((path) => {
+      const parts = path.split("/").filter(Boolean);
+      return {
+        id: path,
+        name: parts[parts.length - 1] || path,
+        count: countsByPath[path],
+        depth: parts.length,
+        parentId: parts.length > 1 ? parts.slice(0, parts.length - 1).join("/") : ""
+      };
+    });
+  }
+  function createMainFrame(attachToStack = true) {
+    mainFrame = createAutolayout("Specs-Variables and Styles", "HORIZONTAL", 100, 0, 0);
     mainFrame.fills = [];
     mainFrame.layoutSizingHorizontal = "HUG";
     mainFrame.layoutSizingVertical = "HUG";
-    variablesFrame = createAutolayout("Local Variables", "HORIZONTAL", 100, 0, 0);
+    variablesFrame = createAutolayout("Specs-Local Variables", "VERTICAL", 24, 24, 24);
     variablesFrame.fills = [];
     variablesFrame.layoutSizingHorizontal = "HUG";
     variablesFrame.layoutSizingVertical = "HUG";
     mainFrame.appendChild(variablesFrame);
-    stylesFrame = createAutolayout("Local Styles", "HORIZONTAL", 100, 0, 0);
+    stylesFrame = createAutolayout("Specs-Local Styles", "VERTICAL", 24, 24, 24);
     stylesFrame.fills = [];
     stylesFrame.layoutSizingHorizontal = "HUG";
     stylesFrame.layoutSizingVertical = "HUG";
     mainFrame.appendChild(stylesFrame);
-    let rightmostX = 0;
-    for (const node of figma.currentPage.children) {
-      if (node.type === "FRAME" || node.type === "COMPONENT" || node.type === "SECTION") {
-        const nodeRight = node.x + node.width;
-        if (nodeRight > rightmostX) {
-          rightmostX = nodeRight;
-        }
-      }
-    }
-    mainFrame.x = rightmostX + 100;
-    mainFrame.y = 0;
     mainFrame.cornerRadius = CORNER_RADIUS;
     mainFrame.setRelaunchData({ rewrite: REWRITE_MSG });
-    try {
-      figma.currentPage.insertChild(0, mainFrame);
-    } catch (e) {
-      figma.currentPage.appendChild(mainFrame);
+    if (attachToStack) {
+      const stack = ensureTokensDocStack();
+      stack.appendChild(mainFrame);
     }
   }
   function getTokensInitData() {
@@ -4384,7 +4647,17 @@
     collections = figma.variables.getLocalVariableCollections() || [];
     activeCollections = collections;
     const sel = selection.map((s) => ({ id: s.id, name: s.name, type: s.type }));
-    const cols = collections.map((c) => ({ id: c.id, name: c.name, modeCount: c.modes.length }));
+    const cols = collections.map((c) => {
+      const vars = c.variableIds.map((id) => figma.variables.getVariableById(id)).filter(Boolean);
+      const groups = buildCollectionGroupSummaries(vars);
+      return {
+        id: c.id,
+        name: c.name,
+        modeCount: c.modes.length,
+        variableCount: vars.length,
+        groups
+      };
+    });
     const paintStyles = figma.getLocalPaintStyles().map((s) => ({ id: s.id, name: s.name }));
     const effectStyles = figma.getLocalEffectStyles().map((s) => ({ id: s.id, name: s.name }));
     const textStyles = figma.getLocalTextStyles().map((s) => {
@@ -4440,6 +4713,16 @@
       };
     });
     const layoutStyles = figma.getLocalGridStyles().map((s) => ({ id: s.id, name: s.name }));
+    let selectedConfig = null;
+    try {
+      const selectedDoc = getSelectedTokensDocFrame();
+      if (selectedDoc) {
+        const raw = selectedDoc.getPluginData(TOKENS_CONFIG_KEY) || "null";
+        selectedConfig = JSON.parse(raw);
+      }
+    } catch (e) {
+      selectedConfig = null;
+    }
     return {
       type: "tokens-init",
       selection: sel,
@@ -4448,57 +4731,110 @@
       effectStyles,
       textStyles,
       layoutStyles,
-      resyncAvailable: !!findTokensDocFrame()
+      resyncAvailable: !!getSelectedTokensDocFrame(),
+      selectedConfig
     };
   }
-  async function regenerateTokensDoc(targetFrame, selectedCollectionIds, colorIds, effectIds, textIds, layoutIds) {
+  async function regenerateTokensDoc(targetFrame, selectedCollectionIds, selectedCollectionGroupsById, colorIds, effectIds, textIds, layoutIds, syncDirection = "variables-to-doc", syncMode = "auto") {
     working = true;
     count = 0;
+    skippedVariableRows = [];
+    skippedStyleRows = [];
     selection = figma.currentPage.selection;
     figma.ui.postMessage({ type: "tokens-status", text: "Preparing generation..." });
     activeCollections = collections.filter((c) => selectedCollectionIds.indexOf(c.id) !== -1);
+    activeCollectionGroupsById = selectedCollectionGroupsById || {};
     activeColorStyleIds = colorIds;
     activeEffectStyleIds = effectIds;
     activeTextStyleIds = textIds;
     activeLayoutStyleIds = layoutIds;
-    if (targetFrame) {
-      mainFrame = targetFrame;
-      while (mainFrame.children.length) mainFrame.children[0].remove();
-    } else {
-      createMainFrame();
-    }
-    propagateSelectedVariableModes(mainFrame);
+    createMainFrame(false);
+    const stagedFrame = mainFrame;
+    propagateSelectedVariableModes(stagedFrame);
     figma.ui.postMessage({ type: "tokens-status", text: "Writing variables..." });
     await writeVariables((progress) => figma.ui.postMessage({ type: "tokens-progress", text: progress }));
     figma.ui.postMessage({ type: "tokens-status", text: "Writing styles..." });
     await writeStyles((progress) => figma.ui.postMessage({ type: "tokens-progress", text: progress }));
-    mainFrame.setPluginData(TOKENS_DOC_KEY, "1");
-    mainFrame.setPluginData(TOKENS_CONFIG_KEY, JSON.stringify({
+    try {
+      if (stylesFrame && stylesFrame.children.length === 0 && stylesFrame.parent) {
+        stylesFrame.remove();
+      }
+    } catch (e) {
+    }
+    try {
+      if (variablesFrame && variablesFrame.children.length === 0 && variablesFrame.parent) {
+        variablesFrame.remove();
+      }
+    } catch (e) {
+    }
+    const configPayload = JSON.stringify({
       collections: selectedCollectionIds,
       colorStyles: colorIds,
       effectStyles: effectIds,
       textStyles: textIds,
-      layoutStyles: layoutIds
-    }));
+      layoutStyles: layoutIds,
+      collectionGroups: selectedCollectionGroupsById || {},
+      syncMode
+    });
+    prependTokenTimestampInVariablesColumn(stagedFrame);
+    stagedFrame.setPluginData(TOKENS_DOC_KEY, "1");
+    stagedFrame.setPluginData(TOKENS_CONFIG_KEY, configPayload);
+    if (targetFrame) {
+      while (targetFrame.children.length) targetFrame.children[0].remove();
+      while (stagedFrame.children.length) targetFrame.appendChild(stagedFrame.children[0]);
+      targetFrame.name = stagedFrame.name;
+      targetFrame.cornerRadius = stagedFrame.cornerRadius;
+      targetFrame.setRelaunchData({ rewrite: REWRITE_MSG });
+      targetFrame.setPluginData(TOKENS_DOC_KEY, stagedFrame.getPluginData(TOKENS_DOC_KEY));
+      targetFrame.setPluginData(TOKENS_CONFIG_KEY, stagedFrame.getPluginData(TOKENS_CONFIG_KEY));
+      writeTokensSyncMeta(targetFrame, syncDirection);
+      mainFrame = targetFrame;
+      try {
+        stagedFrame.remove();
+      } catch (e) {
+      }
+    } else {
+      const stack = ensureTokensDocStack();
+      const groupedFrames = [
+        ...buildGroupFramesFromSectionContainer(variablesFrame, configPayload),
+        ...buildGroupFramesFromSectionContainer(stylesFrame, configPayload)
+      ];
+      if (groupedFrames.length > 0) {
+        for (let i = 0; i < groupedFrames.length; i++) {
+          writeTokensSyncMeta(groupedFrames[i], syncDirection);
+          stack.appendChild(groupedFrames[i]);
+        }
+        mainFrame = groupedFrames[groupedFrames.length - 1];
+        try {
+          stagedFrame.remove();
+        } catch (e) {
+        }
+      } else {
+        writeTokensSyncMeta(stagedFrame, syncDirection);
+        stack.appendChild(stagedFrame);
+        mainFrame = stagedFrame;
+      }
+    }
     finish();
   }
   function handleTokensConfirm(msg) {
     (async () => {
-      var _a, _b;
       try {
         collections = figma.variables.getLocalVariableCollections() || [];
         selection = figma.currentPage.selection;
-        var existingByData = findTokensDocFrame();
-        var existingByRelaunch = ((_a = selection[0]) == null ? void 0 : _a.type) === "FRAME" && ((_b = selection[0]) == null ? void 0 : _b.getRelaunchData().rewrite) === REWRITE_MSG ? selection[0] : null;
-        var target = existingByData || existingByRelaunch || null;
         var selectedIds = Array.isArray(msg.collections) ? msg.collections : collections.map((c) => c.id);
+        var syncMode = normalizeTokensSyncMode(msg && msg.syncMode);
+        var selectedCollectionGroupsById = msg.collectionGroups && typeof msg.collectionGroups === "object" ? msg.collectionGroups : {};
         await regenerateTokensDoc(
-          target,
+          null,
           selectedIds,
+          selectedCollectionGroupsById,
           Array.isArray(msg.colorStyles) ? msg.colorStyles : [],
           Array.isArray(msg.effectStyles) ? msg.effectStyles : [],
           Array.isArray(msg.textStyles) ? msg.textStyles : [],
-          Array.isArray(msg.layoutStyles) ? msg.layoutStyles : []
+          Array.isArray(msg.layoutStyles) ? msg.layoutStyles : [],
+          "variables-to-doc",
+          syncMode
         );
       } catch (err) {
         working = false;
@@ -4508,12 +4844,12 @@
       }
     })();
   }
-  function handleTokensResync() {
+  function handleTokensResync(msg) {
     (async () => {
       try {
-        var target = findTokensDocFrame();
+        var target = getSelectedTokensDocFrame();
         if (!target) {
-          figma.ui.postMessage({ type: "tokens-status", text: "No token documentation found on this page yet \u2014 use Confirm to generate one first." });
+          figma.ui.postMessage({ type: "tokens-status", text: "Select a previous token documentation frame to resync it." });
           return;
         }
         var stored = null;
@@ -4526,14 +4862,68 @@
           figma.ui.postMessage({ type: "tokens-status", text: "No saved selection to resync \u2014 use Confirm instead." });
           return;
         }
+        const requestedMode = normalizeTokensSyncMode(msg && msg.syncMode || stored.syncMode);
+        const meta = readTokensSyncMeta(target);
+        const lastSyncLabel = meta && meta.updatedAt ? " Last sync: " + meta.updatedAt + "." : "";
+        const docMapBefore = extractVariableDescriptionsFromDocFrame(target);
+        const variableIds = Object.keys(docMapBefore);
+        const variableMapBefore = getVariableDescriptionsByIds(variableIds);
+        const docChanged = !meta || hashDescriptionMap(docMapBefore) !== meta.docHash;
+        const variableChanged = !meta || hashDescriptionMap(variableMapBefore) !== meta.variableHash;
+        let syncDirection = "no-op";
+        let syncedCount = 0;
+        if (requestedMode === "doc-to-variables") {
+          syncDirection = "doc-to-variables";
+          syncedCount = syncVariableDescriptionsFromDocFrame(target);
+        } else if (requestedMode === "variables-to-doc") {
+          syncDirection = "variables-to-doc";
+        } else {
+          if (docChanged && !variableChanged) {
+            syncDirection = "doc-to-variables";
+            syncedCount = syncVariableDescriptionsFromDocFrame(target);
+          } else if (!docChanged && variableChanged) {
+            syncDirection = "variables-to-doc";
+          } else if (docChanged && variableChanged) {
+            syncDirection = "merge-doc-preferred";
+            syncedCount = syncVariableDescriptionsFromDocFrame(target);
+          }
+        }
+        if (requestedMode === "doc-to-variables") {
+          figma.ui.postMessage({
+            type: "tokens-status",
+            text: "Forced sync mode: doc -> variables (" + syncedCount + " description" + (syncedCount === 1 ? "" : "s") + " updated)." + lastSyncLabel
+          });
+        } else if (requestedMode === "variables-to-doc") {
+          figma.ui.postMessage({
+            type: "tokens-status",
+            text: "Forced sync mode: variables -> doc (regenerating from Variables panel)." + lastSyncLabel
+          });
+        } else if (syncDirection === "doc-to-variables") {
+          figma.ui.postMessage({
+            type: "tokens-status",
+            text: "Sync direction: doc -> variables (" + syncedCount + " description" + (syncedCount === 1 ? "" : "s") + " updated)." + lastSyncLabel
+          });
+        } else if (syncDirection === "variables-to-doc") {
+          figma.ui.postMessage({ type: "tokens-status", text: "Sync direction: variables -> doc (source variables changed since last sync)." + lastSyncLabel });
+        } else if (syncDirection === "merge-doc-preferred") {
+          figma.ui.postMessage({
+            type: "tokens-status",
+            text: "Both sides changed since last sync; applying doc descriptions first (" + syncedCount + " update" + (syncedCount === 1 ? "" : "s") + "), then regenerating." + lastSyncLabel
+          });
+        } else {
+          figma.ui.postMessage({ type: "tokens-status", text: "No detected description changes since last sync; regenerating doc." + lastSyncLabel });
+        }
         collections = figma.variables.getLocalVariableCollections() || [];
         await regenerateTokensDoc(
           target,
           stored.collections || [],
+          stored.collectionGroups || {},
           stored.colorStyles || [],
           stored.effectStyles || [],
           stored.textStyles || [],
-          stored.layoutStyles || []
+          stored.layoutStyles || [],
+          syncDirection,
+          requestedMode
         );
       } catch (err) {
         working = false;
@@ -4543,913 +4933,1025 @@
       }
     })();
   }
+  var TOKEN_TARGET_WIDTH = 1280;
+  var TOKEN_FRAME_PADDING_X = 24;
+  var PREVIEW_COLUMN_WIDTH = 320;
+  var NAME_COLUMN_WIDTH = 355;
+  var VALUE_COLUMN_WIDTH = TOKEN_TARGET_WIDTH - TOKEN_FRAME_PADDING_X * 2 - PREVIEW_COLUMN_WIDTH - NAME_COLUMN_WIDTH;
+  var TOKEN_TABLE_WIDTH = PREVIEW_COLUMN_WIDTH + NAME_COLUMN_WIDTH + VALUE_COLUMN_WIDTH;
+  var TOKEN_ROW_HEIGHT = 88;
+  var TOKEN_HEADER_HEIGHT = 48;
+  var TOKEN_NAME_FONT_SIZE = 20;
+  var TOKENS_TIMESTAMP_FRAME_NAME = "tokens-timestamp";
+  function createTokenTableSection(title) {
+    const section = createAutolayout(title, "VERTICAL", 0, 0, 0, "HUG", "HUG");
+    section.fills = [LIGHT];
+    return section;
+  }
+  function createTokenGroupTitle(title) {
+    const wrap = createAutolayout("group-title-" + title, "VERTICAL", 0, 0, 0, "HUG", "HUG");
+    const txt = makeText2(title, FONT_SEMIBOLD, 56);
+    txt.fills = [DARK];
+    addToColumn(wrap, txt);
+    return wrap;
+  }
+  function createTokenSubgroupTitle(title) {
+    const wrap = createAutolayout("subgroup-title-" + title, "VERTICAL", 0, 0, 0, "HUG", "HUG");
+    const txt = makeText2(title, FONT_SEMIBOLD, 28);
+    txt.fills = [DARK];
+    addToColumn(wrap, txt);
+    return wrap;
+  }
+  function getTokenTimestampText() {
+    const d = /* @__PURE__ */ new Date();
+    let timezone = "";
+    try {
+      const dtf = new Intl.DateTimeFormat(void 0, { timeZoneName: "short" });
+      const parts = dtf.formatToParts(d);
+      for (let i = 0; i < parts.length; i++) {
+        if (parts[i].type === "timeZoneName") {
+          timezone = parts[i].value;
+          break;
+        }
+      }
+    } catch (e) {
+    }
+    const dateStr = d.toLocaleDateString();
+    const timeStr = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    return timezone ? "Last updated: " + dateStr + " at " + timeStr + " (" + timezone + ")" : "Last updated: " + dateStr + " at " + timeStr;
+  }
+  function createTokenTimestampFrame() {
+    const section = createAutolayout(TOKENS_TIMESTAMP_FRAME_NAME, "VERTICAL", 2, 0, 0, "HUG", "HUG");
+    const stamp = makeText2(getTokenTimestampText(), FONT_REGULAR2, 11);
+    stamp.fills = [COLOR_TEXT_SECONDARY];
+    addToColumn(section, stamp);
+    try {
+      const currentUserName = figma.currentUser && figma.currentUser.name ? figma.currentUser.name.trim() : "";
+      if (currentUserName) {
+        const by = makeText2("By: " + currentUserName, FONT_REGULAR2, 11);
+        by.fills = [COLOR_TEXT_SECONDARY];
+        addToColumn(section, by);
+      }
+    } catch (e) {
+    }
+    return section;
+  }
+  function prependTokenTimestamp(target) {
+    try {
+      const children = target.children || [];
+      for (let i = children.length - 1; i >= 0; i--) {
+        if (children[i].name === TOKENS_TIMESTAMP_FRAME_NAME) children[i].remove();
+      }
+    } catch (e) {
+    }
+    try {
+      target.insertChild(0, createTokenTimestampFrame());
+    } catch (e) {
+      target.appendChild(createTokenTimestampFrame());
+    }
+  }
+  function prependTokenTimestampInVariablesColumn(root) {
+    let inserted = false;
+    try {
+      const kids = root.children || [];
+      for (let i = 0; i < kids.length; i++) {
+        const child = kids[i];
+        if (!child || child.type !== "FRAME") continue;
+        const childName = String(child.name || "");
+        if (childName === "Specs-Local Variables" || childName === "Specs-Local Styles") {
+          prependTokenTimestamp(child);
+          inserted = true;
+        }
+      }
+    } catch (e) {
+    }
+    if (!inserted) prependTokenTimestamp(root);
+  }
+  function getTokenGroupPath(name) {
+    if (!name) return "Ungrouped";
+    const parts = name.split("/").map((p) => p.trim()).filter(Boolean);
+    if (parts.length <= 1) return "Ungrouped";
+    return parts.slice(0, parts.length - 1).join("/");
+  }
+  function groupByTokenPath(items, getName) {
+    const byPath = {};
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const path = getTokenGroupPath(getName(item));
+      if (!byPath[path]) byPath[path] = [];
+      byPath[path].push(item);
+    }
+    const paths = Object.keys(byPath).sort((a, b) => {
+      if (a === "Ungrouped") return 1;
+      if (b === "Ungrouped") return -1;
+      return naturalSort(a, b);
+    });
+    return paths.map((path) => ({ path, items: byPath[path] }));
+  }
+  function normalizeGroupPathForCollection(path, collectionName) {
+    if (!path || path === "Ungrouped") return "Ungrouped";
+    const cRaw = (collectionName || "").trim();
+    const pRaw = path.trim();
+    if (!cRaw) return pRaw;
+    function splitParts(input) {
+      return input.split(/[/\.]/).map((s) => s.trim().toLowerCase()).filter(Boolean);
+    }
+    const cParts = splitParts(cRaw);
+    const pParts = splitParts(pRaw);
+    if (!pParts.length) return "Ungrouped";
+    let start = 0;
+    while (start < cParts.length && start < pParts.length && cParts[start] === pParts[start]) {
+      start++;
+    }
+    if (start >= pParts.length) return "Ungrouped";
+    const remainder = pParts.slice(start);
+    return remainder.length ? remainder.join("/") : "Ungrouped";
+  }
+  function getLeafGroupLabel(path) {
+    if (!path || path === "Ungrouped") return "Ungrouped";
+    const slashParts = path.split("/").map((p) => p.trim()).filter(Boolean);
+    if (slashParts.length > 0) return slashParts[slashParts.length - 1];
+    return path;
+  }
+  function getParentAndLeafGroupLabel(path) {
+    if (!path || path === "Ungrouped") return "Ungrouped";
+    const parts = path.split("/").map((p) => p.trim()).filter(Boolean);
+    if (parts.length <= 1) return parts[0] || "Ungrouped";
+    return parts[parts.length - 2] + " / " + parts[parts.length - 1];
+  }
+  function getLeafTokenName(name) {
+    if (!name) return "";
+    const slashParts = name.split("/").map((p) => p.trim()).filter(Boolean);
+    let leaf = slashParts.length ? slashParts[slashParts.length - 1] : name;
+    const dotParts = leaf.split(".").map((p) => p.trim()).filter(Boolean);
+    if (dotParts.length > 1) leaf = dotParts[dotParts.length - 1];
+    return leaf;
+  }
+  function buildGroupFramesFromSectionContainer(container, configPayload) {
+    const result = [];
+    let currentMajorTitle = "";
+    let currentSubgroupTitle = "";
+    const children = container.children.slice();
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i];
+      const childName = child.name || "";
+      if (childName.indexOf("group-title-") === 0) {
+        currentMajorTitle = childName.substring("group-title-".length) || "Tokens";
+        currentSubgroupTitle = "";
+        continue;
+      }
+      if (childName.indexOf("subgroup-title-") === 0) {
+        currentSubgroupTitle = childName.substring("subgroup-title-".length) || "Ungrouped";
+        continue;
+      }
+      if (child.type === "FRAME") {
+        const out = createAutolayout("Specs-" + currentMajorTitle + "-" + currentSubgroupTitle, "VERTICAL", 12, 24, 24);
+        out.fills = [];
+        out.layoutSizingHorizontal = "HUG";
+        out.layoutSizingVertical = "HUG";
+        out.cornerRadius = CORNER_RADIUS;
+        prependTokenTimestamp(out);
+        out.appendChild(createTokenGroupTitle(currentMajorTitle || "Tokens"));
+        out.appendChild(createTokenSubgroupTitle(currentSubgroupTitle || "Ungrouped"));
+        out.appendChild(child);
+        out.setRelaunchData({ rewrite: REWRITE_MSG });
+        out.setPluginData(TOKENS_DOC_KEY, "1");
+        out.setPluginData(TOKENS_CONFIG_KEY, configPayload);
+        result.push(out);
+        currentSubgroupTitle = "";
+      }
+    }
+    return result;
+  }
+  function setFixedCellWidth(cell, width) {
+    cell.layoutSizingHorizontal = "FIXED";
+    cell.resizeWithoutConstraints(width, cell.height);
+  }
+  function createTokenHeaderRow(title) {
+    const row = createAutolayout(title + "-header", "HORIZONTAL", 0, 0, 0, "HUG", "FIXED");
+    row.resizeWithoutConstraints(TOKEN_TABLE_WIDTH, TOKEN_HEADER_HEIGHT);
+    row.counterAxisAlignItems = "CENTER";
+    row.strokes = [{ type: "SOLID", color: hexToRGB("#cccccc") }];
+    row.strokeWeight = 1;
+    row.strokeBottomWeight = 1;
+    row.strokeTopWeight = 0;
+    row.strokeLeftWeight = 0;
+    row.strokeRightWeight = 0;
+    function makeHeaderCell(label, width) {
+      const cell = createAutolayout("header-" + label, "VERTICAL", 0, ROW_PADDING, 0, "FIXED", "FILL");
+      row.appendChild(cell);
+      setFixedCellWidth(cell, width);
+      const txt = makeText2(label, FONT_SEMIBOLD, FONT_SIZE);
+      addToColumn(cell, txt);
+      return cell;
+    }
+    makeHeaderCell("Preview", PREVIEW_COLUMN_WIDTH);
+    makeHeaderCell("Name", NAME_COLUMN_WIDTH);
+    makeHeaderCell("Value", VALUE_COLUMN_WIDTH);
+    return row;
+  }
+  function createTokenPreviewCell(content) {
+    const cell = createAutolayout("preview-cell", "VERTICAL", 0, 0, 0, "FIXED", "FILL");
+    setFixedCellWidth(cell, PREVIEW_COLUMN_WIDTH);
+    cell.counterAxisAlignItems = "CENTER";
+    cell.primaryAxisAlignItems = "CENTER";
+    if (content) {
+      try {
+        cell.appendChild(content);
+        if (content.layoutAlign !== void 0) {
+          content.layoutAlign = "STRETCH";
+        }
+        if (content.resizeWithoutConstraints && content.type !== "TEXT") {
+          const contentName = String(content.name || "");
+          if (contentName === "text-style-preview-wrap") {
+            ;
+            content.resizeWithoutConstraints(PREVIEW_COLUMN_WIDTH, content.height);
+          } else {
+            ;
+            content.resizeWithoutConstraints(PREVIEW_COLUMN_WIDTH, TOKEN_ROW_HEIGHT);
+          }
+        }
+      } catch (e) {
+      }
+    }
+    return cell;
+  }
+  function createTokenTextCell(name, value, desc) {
+    function textCell(cellName, text, width, muted, size, weight) {
+      const contentWidth = Math.max(80, width - ROW_PADDING * 2);
+      const cell = createAutolayout(cellName, "VERTICAL", 4, ROW_PADDING, 0, "FIXED", "FILL");
+      setFixedCellWidth(cell, width);
+      cell.primaryAxisAlignItems = "CENTER";
+      const txt = makeText2(text || "\u2014", weight || FONT_REGULAR2, size || FONT_SIZE);
+      try {
+        txt.resizeWithoutConstraints(contentWidth, txt.height);
+      } catch (e) {
+      }
+      if (muted) txt.fills = [COLOR_TEXT_SECONDARY];
+      addToColumn(cell, txt);
+      return cell;
+    }
+    const nameContentWidth = Math.max(80, NAME_COLUMN_WIDTH - ROW_PADDING * 2);
+    const n = createAutolayout("name-cell", "VERTICAL", 6, ROW_PADDING, 0, "FIXED", "FILL");
+    setFixedCellWidth(n, NAME_COLUMN_WIDTH);
+    n.primaryAxisAlignItems = "CENTER";
+    const nameTitle = makeText2(name || "\u2014", FONT_SEMIBOLD, TOKEN_NAME_FONT_SIZE);
+    try {
+      nameTitle.resizeWithoutConstraints(nameContentWidth, nameTitle.height);
+    } catch (e) {
+    }
+    const nameDesc = makeText2(desc || "no description", FONT_REGULAR2, FONT_SIZE);
+    try {
+      nameDesc.resizeWithoutConstraints(nameContentWidth, nameDesc.height);
+    } catch (e) {
+    }
+    nameDesc.fills = [COLOR_TEXT_SECONDARY];
+    addToColumn(n, nameTitle);
+    addToColumn(n, nameDesc);
+    const valueText = (value || "\u2014").trim();
+    const valuePaddingY = valueText.indexOf("\n") >= 0 ? 16 : 0;
+    const v = createAutolayout("value-cell", "VERTICAL", 4, ROW_PADDING, valuePaddingY, "FIXED", "FILL");
+    setFixedCellWidth(v, VALUE_COLUMN_WIDTH);
+    v.primaryAxisAlignItems = "CENTER";
+    const valueContentWidth = Math.max(80, VALUE_COLUMN_WIDTH - ROW_PADDING * 2);
+    function renderValueLineWithBadge(line) {
+      const varMatch = line.match(/^(.*?)(var\(--[^)]+\))(\s*\(.*\))?$/);
+      if (!varMatch || !varMatch[2]) {
+        const plain = makeText2(line, FONT_REGULAR2, FONT_SIZE);
+        plain.fills = [DARK];
+        try {
+          plain.resizeWithoutConstraints(valueContentWidth, plain.height);
+        } catch (e) {
+        }
+        return plain;
+      }
+      const label = (varMatch[1] || "").trim();
+      const tokenRef = (varMatch[2] || "").trim();
+      const fallback = (varMatch[3] || "").trim();
+      const lineWrap = createAutolayout("value-line-token", "HORIZONTAL", 2, 0, 0, "FIXED", "HUG");
+      lineWrap.resizeWithoutConstraints(valueContentWidth, 1);
+      lineWrap.counterAxisAlignItems = "CENTER";
+      if (label) {
+        const labelText = makeText2(label + ":", FONT_REGULAR2, FONT_SIZE);
+        labelText.fills = [DARK];
+        lineWrap.appendChild(labelText);
+      }
+      const badge = createAutolayout("token-var-badge", "HORIZONTAL", 0, 6, 3, "HUG", "HUG");
+      badge.cornerRadius = 3;
+      badge.strokes = [COLOR_BORDER];
+      badge.strokeWeight = 1;
+      badge.fills = [COLOR_WHITE];
+      const badgeText = makeText2(tokenRef, FONT_REGULAR2, FONT_SIZE);
+      badgeText.fills = [DARK];
+      badge.appendChild(badgeText);
+      lineWrap.appendChild(badge);
+      if (fallback) {
+        const fallbackText = makeText2(fallback, FONT_REGULAR2, FONT_SIZE);
+        fallbackText.fills = [COLOR_TEXT_SECONDARY];
+        lineWrap.appendChild(fallbackText);
+      }
+      return lineWrap;
+    }
+    const lines = valueText.split(/\r?\n/);
+    for (let li = 0; li < lines.length; li++) {
+      const rawLine = lines[li];
+      const line = (rawLine || "").trim();
+      if (!line) continue;
+      addToColumn(v, renderValueLineWithBadge(line));
+    }
+    if (v.children.length === 0) addToColumn(v, makeText2("\u2014", FONT_REGULAR2, FONT_SIZE));
+    return { nameCell: n, valueCell: v };
+  }
+  function appendTokenRow(section, rowName, preview, tokenName, value, description, isLast) {
+    const row = createAutolayout(rowName, "HORIZONTAL", 0, 0, 0, "FIXED", "HUG");
+    row.resizeWithoutConstraints(TOKEN_TABLE_WIDTH, TOKEN_ROW_HEIGHT);
+    row.minHeight = TOKEN_ROW_HEIGHT;
+    row.counterAxisAlignItems = "CENTER";
+    if (!isLast) {
+      row.strokes = [{ type: "SOLID", color: hexToRGB("#cccccc") }];
+      row.strokeWeight = 1;
+      row.strokeBottomWeight = 1;
+      row.strokeTopWeight = 0;
+      row.strokeLeftWeight = 0;
+      row.strokeRightWeight = 0;
+    }
+    section.appendChild(row);
+    const previewCell = createTokenPreviewCell(preview);
+    const textCells = createTokenTextCell(tokenName, value, description);
+    row.appendChild(previewCell);
+    row.appendChild(textCells.nameCell);
+    row.appendChild(textCells.valueCell);
+    previewCell.layoutAlign = "STRETCH";
+    textCells.nameCell.layoutAlign = "STRETCH";
+    textCells.valueCell.layoutAlign = "STRETCH";
+  }
+  function getCollectionPrimaryMode(c) {
+    if (!c.modes || c.modes.length === 0) return { modeId: "", name: DEFAULT_MODE_NAME };
+    var preferred = c.modes.find((m) => m.name === DEFAULT_MODE_NAME);
+    return preferred || c.modes[0];
+  }
+  function formatResolvedValue(raw) {
+    if (raw === null || raw === void 0) return "\u2014";
+    if (typeof raw === "boolean") return raw ? "true" : "false";
+    if (typeof raw === "number") return String(raw);
+    if (typeof raw === "string") return raw;
+    if (typeof raw === "object" && raw.r !== void 0 && raw.g !== void 0 && raw.b !== void 0) {
+      try {
+        return figmaRGBToHex(raw);
+      } catch (e) {
+        return "color";
+      }
+    }
+    if (typeof raw === "object" && raw.paints) return "paint";
+    if (typeof raw === "object" && raw.effects) return "effects";
+    try {
+      return JSON.stringify(raw);
+    } catch (e) {
+      return String(raw);
+    }
+  }
+  function makeVariableReference(name) {
+    let ref = (name || "").replace(/\//g, ".").trim().toLowerCase();
+    if (ref && ref.indexOf("--") !== 0) ref = "--" + ref;
+    return ref ? "var(" + ref + ")" : "\u2014";
+  }
+  function formatVariableCellValue(v, modeId) {
+    const raw = (v.valuesByMode || {})[modeId];
+    const resolved = resolveAliasValueForMode(raw, modeId);
+    const fallback = formatResolvedValue(resolved);
+    if (raw && typeof raw === "object" && raw.type === "VARIABLE_ALIAS" && raw.id) {
+      const aliasVar = figma.variables.getVariableById(raw.id);
+      const aliasRef = aliasVar ? makeVariableReference(aliasVar.name) : String(raw.id);
+      return fallback && fallback !== "\u2014" ? aliasRef + " (" + fallback + ")" : aliasRef;
+    }
+    const selfRef = makeVariableReference(v.name);
+    return fallback && fallback !== "\u2014" ? selfRef + " (" + fallback + ")" : selfRef;
+  }
+  function resolveAliasValueForMode(raw, modeId) {
+    function resolveInner(value, depth, visited) {
+      if (depth > 12) return value;
+      if (!(value && typeof value === "object" && value.type === "VARIABLE_ALIAS" && value.id)) return value;
+      const aliasId = String(value.id);
+      if (visited[aliasId]) return value;
+      visited[aliasId] = true;
+      try {
+        const aliased = figma.variables.getVariableById(aliasId);
+        if (!aliased) return value;
+        let next = null;
+        if (modeId && aliased.valuesByMode && Object.prototype.hasOwnProperty.call(aliased.valuesByMode, modeId)) {
+          next = aliased.valuesByMode[modeId];
+        } else {
+          const keys = Object.keys(aliased.valuesByMode || {});
+          if (keys.length) next = aliased.valuesByMode[keys[0]];
+        }
+        if (next === null || next === void 0) return value;
+        return resolveInner(next, depth + 1, visited);
+      } catch (e) {
+        return value;
+      }
+    }
+    return resolveInner(raw, 0, {});
+  }
+  function resolveNumericValue(raw, modeId) {
+    const resolved = resolveAliasValueForMode(raw, modeId);
+    if (typeof resolved === "number" && isFinite(resolved)) return resolved;
+    const parsed = parseFloat(String(resolved != null ? resolved : ""));
+    return isFinite(parsed) ? parsed : 0;
+  }
+  function makeVariablePreview(v, modeId) {
+    try {
+      let makeLeftAlignedPreview = function(content) {
+        const wrap = figma.createFrame();
+        wrap.name = "token-left-align-preview";
+        wrap.layoutMode = "HORIZONTAL";
+        wrap.primaryAxisSizingMode = "FIXED";
+        wrap.counterAxisSizingMode = "FIXED";
+        wrap.resize(previewWidth, previewHeight);
+        wrap.itemSpacing = 0;
+        wrap.paddingLeft = 24;
+        wrap.paddingRight = 0;
+        wrap.paddingTop = 0;
+        wrap.paddingBottom = 0;
+        wrap.counterAxisAlignItems = "CENTER";
+        wrap.primaryAxisAlignItems = "MIN";
+        wrap.fills = [];
+        wrap.appendChild(content);
+        return wrap;
+      };
+      const raw = (v.valuesByMode || {})[modeId];
+      const resolvedRaw = resolveAliasValueForMode(raw, modeId);
+      const previewWidth = PREVIEW_COLUMN_WIDTH;
+      const previewHeight = TOKEN_ROW_HEIGHT;
+      if (v.resolvedType === "FLOAT" && /(^|\/)(space|spacing|gap)(\/|$)|\b(space|spacing|gap)\b/i.test(v.name)) {
+        const n = resolveNumericValue(raw, modeId);
+        const row = figma.createFrame();
+        row.name = "space-preview-row";
+        row.layoutMode = "HORIZONTAL";
+        row.primaryAxisSizingMode = "AUTO";
+        row.counterAxisSizingMode = "AUTO";
+        row.itemSpacing = 0;
+        row.fills = [];
+        row.counterAxisAlignItems = "CENTER";
+        const leftDot = figma.createEllipse();
+        leftDot.resize(8, 8);
+        leftDot.fills = [COLOR_BORDER];
+        row.appendChild(leftDot);
+        const spacer = figma.createRectangle();
+        const px = Math.max(1, Math.round(n));
+        spacer.resize(px, 16);
+        spacer.cornerRadius = 0;
+        spacer.fills = [DARK];
+        try {
+          spacer.setBoundVariable("width", v);
+        } catch (e) {
+        }
+        row.appendChild(spacer);
+        const rightDot = figma.createEllipse();
+        rightDot.resize(8, 8);
+        rightDot.fills = [COLOR_BORDER];
+        row.appendChild(rightDot);
+        return makeLeftAlignedPreview(row);
+      }
+      if (v.resolvedType === "FLOAT" && /(^|\/)(radius|corner|rounded)(\/|$)|\b(radius|corner|rounded)\b/i.test(v.name)) {
+        const n = resolveNumericValue(raw, modeId);
+        const radiusPreview = figma.createRectangle();
+        radiusPreview.resize(40, 40);
+        radiusPreview.fills = [COLOR_BG_LIGHT];
+        try {
+          ;
+          radiusPreview.setBoundVariable("topLeftRadius", v);
+          radiusPreview.setBoundVariable("topRightRadius", v);
+          radiusPreview.setBoundVariable("bottomLeftRadius", v);
+          radiusPreview.setBoundVariable("bottomRightRadius", v);
+        } catch (e) {
+          radiusPreview.cornerRadius = Math.max(0, n);
+        }
+        return makeLeftAlignedPreview(radiusPreview);
+      }
+      if (v.resolvedType === "FLOAT" && /font[\.\s\-_]*size|\bfontSize\b|(^|[\.\/_-])fs([\.\/_-]|$)/i.test(v.name)) {
+        const n = resolveNumericValue(raw, modeId);
+        const text = makeText2("Aa", FONT_REGULAR2, Math.max(8, n || 16));
+        text.fills = [DARK];
+        try {
+          text.fontSize = Math.max(8, n || 16);
+        } catch (e) {
+        }
+        try {
+          text.setBoundVariable("fontSize", v);
+        } catch (e) {
+        }
+        return makeLeftAlignedPreview(text);
+      }
+      if (v.resolvedType === "FLOAT" && /line[\.\s\-_]*height|\blineHeight\b|(^|[\.\/_-])lh([\.\/_-]|$)/i.test(v.name)) {
+        const n = resolveNumericValue(raw, modeId);
+        const text = makeText2("Aa", FONT_REGULAR2, 20);
+        text.fills = [DARK];
+        try {
+          ;
+          text.setBoundVariable("lineHeight", v);
+        } catch (e) {
+          try {
+            text.lineHeight = { unit: "PIXELS", value: Math.max(8, n || 24) };
+          } catch (ee) {
+          }
+        }
+        return makeLeftAlignedPreview(text);
+      }
+      if (v.resolvedType === "COLOR") {
+        const sw = figma.createRectangle();
+        sw.resize(previewWidth, previewHeight);
+        sw.cornerRadius = 0;
+        const fills = JSON.parse(JSON.stringify(sw.fills));
+        try {
+          fills[0] = figma.variables.setBoundVariableForPaint(fills[0], "color", v);
+          sw.fills = fills;
+        } catch (e) {
+          if (resolvedRaw && typeof resolvedRaw === "object" && resolvedRaw.r !== void 0) {
+            sw.fills = [{ type: "SOLID", color: { r: resolvedRaw.r, g: resolvedRaw.g, b: resolvedRaw.b }, opacity: resolvedRaw.a !== void 0 ? resolvedRaw.a : 1 }];
+          }
+        }
+        if ((!sw.fills || Array.isArray(sw.fills) && sw.fills.length === 0) && resolvedRaw && typeof resolvedRaw === "object" && resolvedRaw.r !== void 0) {
+          sw.fills = [{ type: "SOLID", color: { r: resolvedRaw.r, g: resolvedRaw.g, b: resolvedRaw.b }, opacity: resolvedRaw.a !== void 0 ? resolvedRaw.a : 1 }];
+        }
+        return sw;
+      }
+      if (v.resolvedType === "BOOLEAN") {
+        const chip = figma.createFrame();
+        chip.layoutMode = "HORIZONTAL";
+        chip.primaryAxisSizingMode = "FIXED";
+        chip.counterAxisSizingMode = "FIXED";
+        chip.resize(Math.max(100, previewWidth - 32), 36);
+        chip.cornerRadius = 18;
+        chip.strokes = [COLOR_BORDER];
+        chip.strokeWeight = 1;
+        chip.fills = raw === true ? [DARK] : [COLOR_WHITE];
+        return chip;
+      }
+      if (v.resolvedType === "FLOAT") {
+        if (/font|typography|type|line[\.\s\-_]*height|font[\.\s\-_]*size/i.test(v.name)) {
+          const fallbackText = makeText2("Aa", FONT_REGULAR2, 16);
+          fallbackText.fills = [DARK];
+          return makeLeftAlignedPreview(fallbackText);
+        }
+        const n = resolveNumericValue(raw, modeId);
+        const bar = figma.createRectangle();
+        bar.resize(Math.max(8, Math.min(previewWidth, n)), 20);
+        bar.cornerRadius = 6;
+        bar.fills = [COLOR_BG_LIGHT];
+        return bar;
+      }
+      if (v.resolvedType === "STRING" && /(^|\/)(font|typography|type)(\/|$)|\b(font|typography|type|weight|family)\b/i.test(v.name) || v.resolvedType === "FLOAT" && /(^|[\.\/_-])fw([\.\/_-]|$)|\bfont[\.\s\-_]*weight\b/i.test(v.name)) {
+        const sample = makeText2("Aa", FONT_REGULAR2, 28);
+        sample.fills = [DARK];
+        return makeLeftAlignedPreview(sample);
+      }
+      const t = makeText2(v.resolvedType || "Value", FONT_REGULAR2, FONT_SIZE);
+      return t;
+    } catch (e) {
+      return null;
+    }
+  }
+  function summarizePaintStyleValue(s) {
+    const p = (s.paints || [])[0];
+    if (!p) return "\u2014";
+    if (p.type === "SOLID" && p.color) {
+      try {
+        return figmaRGBToHex(p.color);
+      } catch (e) {
+        return "solid";
+      }
+    }
+    if (String(p.type || "").indexOf("GRADIENT") >= 0) return String(p.type).toLowerCase();
+    return String(p.type || "paint");
+  }
+  function getVariableFromBinding(binding) {
+    try {
+      if (!binding) return null;
+      if (typeof binding === "string") return figma.variables.getVariableById(binding);
+      if (Array.isArray(binding)) {
+        for (let i = 0; i < binding.length; i++) {
+          const found = getVariableFromBinding(binding[i]);
+          if (found) return found;
+        }
+        return null;
+      }
+      if (typeof binding === "object" && typeof binding.id === "string") {
+        return figma.variables.getVariableById(binding.id);
+      }
+      if (typeof binding === "object" && typeof binding.variableId === "string") {
+        return figma.variables.getVariableById(binding.variableId);
+      }
+      if (typeof binding === "object") {
+        const obj = binding;
+        const keys = Object.keys(obj);
+        for (let i = 0; i < keys.length; i++) {
+          const found = getVariableFromBinding(obj[keys[i]]);
+          if (found) return found;
+        }
+      }
+    } catch (e) {
+    }
+    return null;
+  }
+  function getVariablePreferredModeId(v) {
+    try {
+      const c = figma.variables.getVariableCollectionById(v.variableCollectionId);
+      if (c) {
+        const anyCollection = c;
+        if (typeof anyCollection.defaultModeId === "string" && anyCollection.defaultModeId) {
+          return anyCollection.defaultModeId;
+        }
+        const preferred = getCollectionPrimaryMode(c);
+        if (preferred && preferred.modeId) return preferred.modeId;
+      }
+    } catch (e) {
+    }
+    const keys = Object.keys(v.valuesByMode || {});
+    return keys.length ? keys[0] : "";
+  }
+  function summarizeBoundEffectProperty(raw, binding, unit, formatter) {
+    const valueFormatter = formatter || formatResolvedValue;
+    const formattedRaw = valueFormatter(raw);
+    const fallback = unit && typeof raw === "number" ? String(raw) + unit : formattedRaw;
+    const variable = getVariableFromBinding(binding);
+    if (!variable) return { primary: fallback, fallback, hasBinding: false };
+    const modeId = getVariablePreferredModeId(variable);
+    const variableRaw = (variable.valuesByMode || {})[modeId];
+    const resolved = resolveAliasValueForMode(variableRaw, modeId);
+    let resolvedText = valueFormatter(resolved);
+    if (unit && typeof resolved === "number") resolvedText += unit;
+    const ref = makeVariableReference(variable.name);
+    return {
+      primary: ref,
+      fallback: resolvedText && resolvedText !== "\u2014" ? resolvedText : fallback,
+      hasBinding: true
+    };
+  }
+  function summarizeEffectStyleValue(s) {
+    const e = (s.effects || [])[0];
+    if (!e) return "\u2014";
+    const bound = e && typeof e === "object" && e.boundVariables && typeof e.boundVariables === "object" ? e.boundVariables : {};
+    function boundProp(key) {
+      if (!bound) return null;
+      if (Object.prototype.hasOwnProperty.call(bound, key)) return bound[key];
+      return null;
+    }
+    function boundNested(parent, key) {
+      if (!bound) return null;
+      const parentValue = boundProp(parent);
+      if (!parentValue || typeof parentValue !== "object") return null;
+      if (Object.prototype.hasOwnProperty.call(parentValue, key)) return parentValue[key];
+      return null;
+    }
+    if (e.type === "DROP_SHADOW" || e.type === "INNER_SHADOW") {
+      const ox = Math.round(e.offset && e.offset.x || 0);
+      const oy = Math.round(e.offset && e.offset.y || 0);
+      const blur = Math.round(e.radius || 0);
+      const spread = Math.round(e.spread || 0);
+      const color = e.color && typeof e.color === "object" ? e.color : null;
+      const xPart = summarizeBoundEffectProperty(ox, boundProp("offsetX") || boundNested("offset", "x"), "px");
+      const yPart = summarizeBoundEffectProperty(oy, boundProp("offsetY") || boundNested("offset", "y"), "px");
+      const blurPart = summarizeBoundEffectProperty(blur, boundProp("radius") || boundProp("blur"), "px");
+      const spreadPart = summarizeBoundEffectProperty(spread, boundProp("spread"), "px");
+      const colorPart = summarizeBoundEffectProperty(color, boundProp("color"), "", (v) => {
+        if (v && typeof v === "object" && v.r !== void 0 && v.g !== void 0 && v.b !== void 0) {
+          try {
+            return figmaRGBToHex(v);
+          } catch (e2) {
+            return "color";
+          }
+        }
+        return formatResolvedValue(v);
+      });
+      const hasBindings = xPart.hasBinding || yPart.hasBinding || blurPart.hasBinding || spreadPart.hasBinding || colorPart.hasBinding;
+      if (!hasBindings) return `${e.type.toLowerCase()}: ${ox}px ${oy}px ${blur}px ${spread}px ${colorPart.fallback}`;
+      const primary = `${e.type.toLowerCase()}: x ${xPart.primary}, y ${yPart.primary}, blur ${blurPart.primary}, spread ${spreadPart.primary}, color ${colorPart.primary}`;
+      const fallback = `x ${xPart.fallback}, y ${yPart.fallback}, blur ${blurPart.fallback}, spread ${spreadPart.fallback}, color ${colorPart.fallback}`;
+      return `${primary} (${fallback})`;
+    }
+    if (e.type === "LAYER_BLUR" || e.type === "BACKGROUND_BLUR") {
+      const blur = Math.round(e.radius || 0);
+      const blurPart = summarizeBoundEffectProperty(blur, boundProp("radius") || boundProp("blur"), "px");
+      if (!blurPart.hasBinding) return `${e.type.toLowerCase()}: ${blurPart.fallback}`;
+      return `${e.type.toLowerCase()}: ${blurPart.primary} (${blurPart.fallback})`;
+    }
+    return String(e.type || "effect").toLowerCase();
+  }
+  function summarizeTextStyleValue(s) {
+    const ts = s;
+    const bound = ts && typeof ts === "object" && ts.boundVariables && typeof ts.boundVariables === "object" ? ts.boundVariables : {};
+    function getBoundByPath(path) {
+      if (!bound || !path) return null;
+      const parts = path.split(".");
+      let current = bound;
+      for (let i = 0; i < parts.length; i++) {
+        const part = parts[i];
+        if (!current || typeof current !== "object") return null;
+        if (!Object.prototype.hasOwnProperty.call(current, part)) return null;
+        current = current[part];
+      }
+      return current;
+    }
+    function boundProp(paths) {
+      if (!bound) return null;
+      for (let i = 0; i < paths.length; i++) {
+        const v = getBoundByPath(paths[i]);
+        if (v) return v;
+      }
+      return null;
+    }
+    function formatFontFamily(v) {
+      if (!v) return "\u2014";
+      if (typeof v === "string") return v;
+      if (typeof v === "object" && typeof v.family === "string") return v.family;
+      return formatResolvedValue(v);
+    }
+    function formatFontStyle(v) {
+      if (!v) return "\u2014";
+      if (typeof v === "string") return v;
+      if (typeof v === "object" && typeof v.style === "string") return v.style;
+      return formatResolvedValue(v);
+    }
+    function formatSizePx(v) {
+      if (typeof v === "number") {
+        const rounded = Math.round(v * 100) / 100;
+        return `${String(rounded)}px`;
+      }
+      return formatResolvedValue(v);
+    }
+    function formatDimension(v) {
+      if (v === null || v === void 0) return "\u2014";
+      if (typeof v === "number") {
+        const rounded = Math.round(v * 100) / 100;
+        return `${String(rounded)}px`;
+      }
+      if (typeof v === "object") {
+        const unit = String(v.unit || "").toUpperCase();
+        const value = v.value;
+        if (unit === "AUTO") return "auto";
+        if (typeof value === "number") {
+          const rounded = Math.round(value * 100) / 100;
+          if (unit === "PIXELS") return `${rounded}px`;
+          if (unit === "PERCENT") return `${rounded}%`;
+          return `${rounded}${unit ? " " + unit.toLowerCase() : ""}`.trim();
+        }
+      }
+      return formatResolvedValue(v);
+    }
+    function toLine(label, part) {
+      if (part.hasBinding) return `${label}: ${part.primary} (${part.fallback})`;
+      return `${label}: ${part.fallback}`;
+    }
+    const fontName = ts.fontName && typeof ts.fontName === "object" ? ts.fontName : null;
+    const familyPart = summarizeBoundEffectProperty(
+      fontName ? { family: fontName.family } : null,
+      boundProp(["fontFamily", "fontName.family", "fontName"]),
+      "",
+      formatFontFamily
+    );
+    const stylePart = summarizeBoundEffectProperty(
+      fontName ? { style: fontName.style } : null,
+      boundProp(["fontStyle", "fontName.style", "fontName"]),
+      "",
+      formatFontStyle
+    );
+    const sizePart = summarizeBoundEffectProperty(ts.fontSize, boundProp(["fontSize", "typography.fontSize"]), "px", formatSizePx);
+    const lineHeightPart = summarizeBoundEffectProperty(ts.lineHeight, boundProp(["lineHeight", "lineHeight.value", "typography.lineHeight"]), "", formatDimension);
+    const letterSpacingPart = summarizeBoundEffectProperty(ts.letterSpacing, boundProp(["letterSpacing", "letterSpacing.value", "typography.letterSpacing"]), "", formatDimension);
+    const lines = [
+      toLine("fontFamily", familyPart),
+      toLine("fontWeight", stylePart),
+      toLine("fontSize", sizePart),
+      toLine("lineHeight", lineHeightPart),
+      toLine("letterSpacing", letterSpacingPart)
+    ];
+    return lines.join("\n");
+  }
+  function summarizeLayoutStyleValue(s) {
+    const grids = s.layoutGrids || [];
+    if (!grids.length) return "\u2014";
+    const g = grids[0];
+    const pattern = g.pattern || "GRID";
+    const count2 = g.count !== void 0 ? g.count : "-";
+    const gutter = g.gutterSize !== void 0 ? g.gutterSize : "-";
+    return `${String(pattern).toLowerCase()} \u2022 count ${count2} \u2022 gutter ${gutter}`;
+  }
+  function makeStylePreview(styleId, kind) {
+    try {
+      const previewWidth = PREVIEW_COLUMN_WIDTH;
+      const previewHeight = TOKEN_ROW_HEIGHT;
+      if (kind === "paint") {
+        const r2 = figma.createRectangle();
+        r2.resize(previewWidth, previewHeight);
+        r2.cornerRadius = 0;
+        r2.fillStyleId = styleId;
+        return r2;
+      }
+      if (kind === "effect") {
+        const wrap = figma.createFrame();
+        wrap.name = "effect-style-preview-wrap";
+        wrap.layoutMode = "HORIZONTAL";
+        wrap.primaryAxisSizingMode = "FIXED";
+        wrap.counterAxisSizingMode = "FIXED";
+        wrap.resize(previewWidth, previewHeight);
+        wrap.itemSpacing = 0;
+        wrap.paddingLeft = 24;
+        wrap.paddingRight = 0;
+        wrap.paddingTop = 0;
+        wrap.paddingBottom = 0;
+        wrap.counterAxisAlignItems = "CENTER";
+        wrap.primaryAxisAlignItems = "MIN";
+        wrap.fills = [];
+        const r2 = figma.createRectangle();
+        r2.resize(40, 40);
+        r2.cornerRadius = 16;
+        r2.fills = [COLOR_WHITE];
+        r2.effectStyleId = styleId;
+        wrap.appendChild(r2);
+        return wrap;
+      }
+      if (kind === "text") {
+        const wrap = createAutolayout("text-style-preview-wrap", "HORIZONTAL", 0, 24, 0, "FIXED", "HUG");
+        wrap.resizeWithoutConstraints(previewWidth, 1);
+        wrap.counterAxisAlignItems = "MIN";
+        wrap.primaryAxisAlignItems = "MIN";
+        const t = makeText2("The quick brown fox", FONT_REGULAR2, 24);
+        try {
+          ;
+          t.textStyleId = styleId;
+        } catch (e) {
+        }
+        t.fills = [DARK];
+        t.resizeWithoutConstraints(Math.max(80, previewWidth - 48), t.height);
+        wrap.appendChild(t);
+        return wrap;
+      }
+      const r = figma.createRectangle();
+      r.resize(previewWidth, previewHeight);
+      r.cornerRadius = 0;
+      r.fills = [COLOR_BG_LIGHT];
+      return r;
+    } catch (e) {
+      return null;
+    }
+  }
   async function writeVariables(onProgress) {
-    var _a, _b;
-    await figma.loadFontAsync(FONT_REGULAR2);
-    await figma.loadFontAsync(FONT_SEMIBOLD);
-    await figma.loadFontAsync(FONT_ITALIC);
+    await ensureTokenFontsLoaded();
     for (const c of activeCollections) {
       if (onProgress) onProgress("Collection: " + c.name);
-      const collectionBox = createAutolayout(c.name, "VERTICAL", GAP_BETWEEN_SECTIONS, 0, 0);
-      collectionBox.fills = [LIGHT];
-      collectionBox.layoutSizingVertical = "HUG";
-      collectionBox.layoutSizingHorizontal = "HUG";
-      collectionBox.minWidth = MAX_COLUMN_WIDTH;
-      variablesFrame.appendChild(collectionBox);
-      const variables = c.variableIds.map((id) => figma.variables.getVariableById(id));
-      variables.sort((a, b) => naturalSort(a.name, b.name));
-      const modes = c.modes;
-      const headerRow = createAutolayout(c.name + "-modes-header", "HORIZONTAL", GAP_BETWEEN_ROWS, 0, 0, "HUG");
-      collectionBox.appendChild(headerRow);
-      headerRow.layoutSizingHorizontal = "HUG";
-      headerRow.minWidth = MAX_COLUMN_WIDTH;
-      headerRow.strokes = [{ type: "SOLID", color: hexToRGB("#cccccc") }];
-      headerRow.strokeWeight = 1;
-      headerRow.dashPattern = [4, 4];
-      headerRow.strokeBottomWeight = 1;
-      headerRow.strokeTopWeight = 0;
-      headerRow.strokeLeftWeight = 0;
-      headerRow.strokeRightWeight = 0;
-      const leftHeader = createAutolayout("left-header", "VERTICAL", 4, ROW_PADDING, ROW_PADDING);
-      headerRow.appendChild(leftHeader);
-      leftHeader.layoutSizingHorizontal = "FIXED";
-      leftHeader.resizeWithoutConstraints(LEFT_COLUMN_WIDTH, leftHeader.height);
-      const cHeader = makeText2(sanitizeName(c.name), FONT_SEMIBOLD, L_FONT_SIZE);
-      addToColumn(leftHeader, cHeader);
-      for (const m of modes) {
-        const headerCell = createAutolayout("mode-header-" + m.modeId, "VERTICAL", 0, ROW_PADDING, ROW_PADDING);
-        headerRow.appendChild(headerCell);
-        headerCell.layoutSizingHorizontal = "HUG";
-        headerCell.layoutSizingVertical = "FILL";
-        headerCell.minWidth = MIN_MODE_COLUMN_WIDTH;
-        headerCell.primaryAxisAlignItems = "CENTER";
-        headerCell.counterAxisAlignItems = "CENTER";
-        if (m.name.toLowerCase() === "dark") {
-          headerCell.fills = [COLOR_DARK_MODE_BG];
-          headerCell.topLeftRadius = 16;
-          headerCell.topRightRadius = 16;
+      const allCollectionVariables = c.variableIds.map((id) => figma.variables.getVariableById(id)).filter(Boolean);
+      const hasGroupConfig = Object.prototype.hasOwnProperty.call(activeCollectionGroupsById, c.id);
+      const selectedGroups = hasGroupConfig ? activeCollectionGroupsById[c.id] || [] : ["*"];
+      const allowAllGroups = selectedGroups.indexOf("*") !== -1;
+      const selectedPrefixes = selectedGroups.filter((g) => g && g !== "*");
+      let variables = allowAllGroups ? allCollectionVariables : allCollectionVariables.filter((v) => {
+        const groupPath = getVariableGroupPath(v.name);
+        if (!groupPath) return false;
+        for (const prefix of selectedPrefixes) {
+          if (groupPath === prefix || groupPath.indexOf(prefix + "/") === 0) return true;
         }
-        const valueHeader = makeText2(m.name === DEFAULT_MODE_NAME && modes.length === 1 ? "Value" : m.name, FONT_SEMIBOLD, FONT_SIZE);
-        valueHeader.fills = m.name.toLowerCase() === "dark" ? [COLOR_DARK_MODE_TEXT] : [{ type: "SOLID", color: hexToRGB("#000000") }];
-        addToColumn(headerCell, valueHeader);
-        valueHeader.textAlignVertical = "CENTER";
+        return false;
+      });
+      if (!allowAllGroups && !variables.length && selectedPrefixes.length) {
+        const lowerPrefixes = selectedPrefixes.map((p) => p.toLowerCase());
+        variables = allCollectionVariables.filter((v) => {
+          const name = (v.name || "").toLowerCase();
+          for (const prefix of lowerPrefixes) {
+            if (!prefix) continue;
+            if (name === prefix) return true;
+            if (name.indexOf(prefix + "/") === 0) return true;
+            if (name.indexOf("/" + prefix + "/") !== -1) return true;
+            if (name.indexOf("." + prefix + ".") !== -1) return true;
+          }
+          return false;
+        });
       }
-      for (const v of variables) {
-        if (onProgress) onProgress("Variable: " + v.name);
-        const row = createAutolayout("row-" + v.name, "HORIZONTAL", GAP_BETWEEN_ROWS, 0, 0, "HUG");
-        collectionBox.appendChild(row);
-        row.layoutSizingHorizontal = "HUG";
-        row.minWidth = MAX_COLUMN_WIDTH;
-        const isLast = variables.indexOf(v) === variables.length - 1;
-        if (!isLast) {
-          row.strokes = [{ type: "SOLID", color: hexToRGB("#cccccc") }];
-          row.strokeWeight = 1;
-          row.dashPattern = [4, 4];
-          row.strokeBottomWeight = 1;
-          row.strokeTopWeight = 0;
-          row.strokeLeftWeight = 0;
-          row.strokeRightWeight = 0;
-        }
-        const leftCell = createAutolayout("left-" + v.name, "VERTICAL", 4);
-        row.appendChild(leftCell);
-        leftCell.layoutSizingHorizontal = "FIXED";
-        leftCell.resizeWithoutConstraints(LEFT_COLUMN_WIDTH, leftCell.height);
-        leftCell.paddingTop = ROW_PADDING;
-        leftCell.paddingBottom = ROW_PADDING;
-        leftCell.paddingLeft = ROW_PADDING;
-        leftCell.paddingRight = ROW_PADDING;
-        const vName = makeText2(sanitizeName(v.name), FONT_SEMIBOLD, FONT_SIZE);
-        addToColumn(leftCell, vName);
-        const vDesc = makeText2(v.description || "no description", FONT_REGULAR2, 14);
-        vDesc.fills = [COLOR_TEXT_SECONDARY];
-        addToColumn(leftCell, vDesc);
-        count++;
-        for (const m of modes) {
-          const isDark = m.name.toLowerCase() === "dark";
-          const isLastRow = variables.indexOf(v) === variables.length - 1;
-          const valueColumn = createAutolayout("value-" + v.name + "-" + m.modeId, "VERTICAL", isDark ? 8 : 8);
-          row.appendChild(valueColumn);
-          valueColumn.layoutSizingHorizontal = "HUG";
-          valueColumn.layoutSizingVertical = "FILL";
-          valueColumn.minWidth = MIN_MODE_COLUMN_WIDTH;
-          if (modes.length > 2) valueColumn.maxWidth = 500;
-          valueColumn.setExplicitVariableModeForCollection(c.id, m.modeId);
-          if (isDark) {
-            valueColumn.fills = [COLOR_DARK_MODE_BG];
-            valueColumn.strokes = [COLOR_DARK_MODE_BORDER];
-            valueColumn.strokeWeight = 1;
-            valueColumn.paddingTop = ROW_PADDING;
-            valueColumn.paddingBottom = ROW_PADDING;
-            valueColumn.paddingLeft = ROW_PADDING;
-            valueColumn.paddingRight = ROW_PADDING;
-            if (isLastRow) {
-              valueColumn.bottomLeftRadius = 16;
-              valueColumn.bottomRightRadius = 16;
-            }
-          } else {
-            valueColumn.fills = [];
-            valueColumn.paddingTop = ROW_PADDING;
-            valueColumn.paddingBottom = ROW_PADDING;
-            valueColumn.paddingLeft = ROW_PADDING;
-            valueColumn.paddingRight = ROW_PADDING;
-          }
-          if (typeof m.name === "string" && /interaction|focus/i.test(m.name)) {
-            valueColumn.clipsContent = false;
-            row.clipsContent = false;
-          }
-          const rawValue = v.valuesByMode[m.modeId];
-          const type = v.resolvedType;
-          let valueStr = "";
-          let font = FONT_REGULAR2;
-          let isAlias = false;
-          if (rawValue && typeof rawValue === "object" && rawValue.type === "VARIABLE_ALIAS") {
-            isAlias = true;
-            const aliased = figma.variables.getVariableById(rawValue.id);
-            valueStr = aliased ? aliased.name.toString() : String(rawValue.id);
-            font = FONT_ITALIC;
-          } else {
-            if (type === "COLOR") {
-              valueStr = figmaRGBToHex(rawValue);
-            } else if (rawValue && typeof rawValue === "object" && (rawValue.paints || Array.isArray(rawValue) && rawValue[0] && rawValue[0].type)) {
-              const paints = rawValue.paints ? rawValue.paints : Array.isArray(rawValue) ? rawValue : [rawValue];
-              const first = paints[0];
-              if (first) {
-                if (first.type === "SOLID" && first.color) {
-                  valueStr = figmaRGBToHex(first.color);
-                } else if (first.gradientStops && Array.isArray(first.gradientStops)) {
-                  const gradientPreview = figma.createRectangle();
-                  gradientPreview.resize(PREVIEW_WIDTH, PREVIEW_HEIGHT);
-                  try {
-                    const gradFills = JSON.parse(JSON.stringify(gradientPreview.fills));
-                    gradFills[0] = figma.variables.setBoundVariableForPaint(gradFills[0], "color", v);
-                    gradientPreview.fills = gradFills;
-                  } catch (e) {
-                    gradientPreview.fills = [first];
-                  }
-                  valueColumn.appendChild(gradientPreview);
-                  const gtype = (first.type || "GRADIENT").replace(/^GRADIENT_?/i, "");
-                  const gradientType = gtype.charAt(0).toUpperCase() + gtype.slice(1).toLowerCase();
-                  const firstPos = Math.round((((_a = first.gradientStops[0]) == null ? void 0 : _a.position) || 0) * 100) + "%";
-                  const gradientHeader = makeText2(gradientType + " \u2014 " + firstPos, FONT_REGULAR2, FONT_SIZE);
-                  gradientHeader.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [DARK];
-                  valueColumn.appendChild(gradientHeader);
-                  for (const s of first.gradientStops) {
-                    const stopRow = createAutolayout("gradient-stop", "HORIZONTAL", GAP_SWATCH_ITEMS);
-                    valueColumn.appendChild(stopRow);
-                    const colorVar = resolveColorVariableForMode(s.color, c.id, m.modeId);
-                    const swatchPreview = figma.createRectangle();
-                    swatchPreview.resize(SWATCH_SIZE, SWATCH_SIZE);
-                    swatchPreview.cornerRadius = BORDER_RADIUS_SM;
-                    if (colorVar) {
-                      swatchPreview.setExplicitVariableModeForCollection(c.id, m.modeId);
-                      const swatchFills = JSON.parse(JSON.stringify(swatchPreview.fills));
-                      try {
-                        swatchFills[0] = figma.variables.setBoundVariableForPaint(swatchFills[0], "color", colorVar);
-                      } catch (e) {
-                      }
-                      swatchPreview.fills = swatchFills;
-                    } else {
-                      const col = { r: s.color.r || 0, g: s.color.g || 0, b: s.color.b || 0 };
-                      const alpha = s.color.a !== void 0 ? s.color.a : 1;
-                      swatchPreview.fills = [{ type: "SOLID", color: col, opacity: alpha }];
-                    }
-                    stopRow.appendChild(swatchPreview);
-                    const label = colorVar ? sanitizeName(colorVar.name) : resolveColorLabel(s.color);
-                    const labelTxt = makeText2(label, FONT_REGULAR2, FONT_SIZE);
-                    labelTxt.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [DARK];
-                    stopRow.appendChild(labelTxt);
-                    if (colorVar) {
-                      const hex = figmaRGBToHex(s.color);
-                      const hexTxt = makeText2(hex, FONT_REGULAR2, FONT_SIZE);
-                      hexTxt.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [COLOR_TEXT_SECONDARY];
-                      stopRow.appendChild(hexTxt);
-                    }
-                  }
-                  const lastPos = Math.round((((_b = first.gradientStops[first.gradientStops.length - 1]) == null ? void 0 : _b.position) || 1) * 100) + "%";
-                  const gradientFooter = makeText2(lastPos, FONT_REGULAR2, FONT_SIZE);
-                  gradientFooter.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [DARK];
-                  valueColumn.appendChild(gradientFooter);
-                  valueStr = "";
-                } else {
-                  valueStr = first.type ? String(first.type) : JSON.stringify(first);
-                }
-              }
-            } else if (rawValue && typeof rawValue === "object" && rawValue.effects) {
-              try {
-                const parts = rawValue.effects.map((e) => {
-                  if (e.type === "DROP_SHADOW" || e.type === "INNER_SHADOW") {
-                    const ox = Math.round(e.offset && e.offset.x || 0);
-                    const oy = Math.round(e.offset && e.offset.y || 0);
-                    const blur = Math.round(e.radius || 0);
-                    const alpha = e.color && e.color.a !== void 0 ? e.color.a : 1;
-                    const col = e.color ? figmaRGBToHex(e.color) : "";
-                    return `${e.type} ${ox}px ${oy}px ${blur}px ${col} ${Math.round(alpha * 100)}%`;
-                  }
-                  if (e.type === "LAYER_BLUR" || e.type === "BACKGROUND_BLUR") {
-                    return `${e.type} ${Math.round(e.radius || 0)}px`;
-                  }
-                  return e.type;
-                });
-                valueStr = parts.join("; ");
-              } catch (e) {
-                valueStr = JSON.stringify(rawValue.effects);
-              }
-            } else {
-              valueStr = rawValue !== void 0 && rawValue !== null ? rawValue.toString() : "";
-            }
-          }
-          if (type === "COLOR") {
-            const previewRow = createAutolayout("preview-" + v.name + "-" + m.modeId, "VERTICAL", GAP_PREVIEW_ITEMS);
-            valueColumn.appendChild(previewRow);
-            previewRow.layoutSizingHorizontal = "FILL";
-            const colorPreview = figma.createRectangle();
-            colorPreview.resize(PREVIEW_WIDTH, PREVIEW_HEIGHT);
-            if (isAlias && "cornerRadius" in colorPreview) colorPreview.cornerRadius = 4;
-            if (!isAlias && "cornerRadius" in colorPreview) colorPreview.cornerRadius = 24;
-            const newFills = JSON.parse(JSON.stringify(colorPreview.fills));
-            try {
-              newFills[0] = figma.variables.setBoundVariableForPaint(newFills[0], "color", v);
-            } catch (e) {
-            }
-            colorPreview.fills = newFills;
-            colorPreview.strokes = [DARK_20];
-            colorPreview.strokeWeight = 1;
-            colorPreview.layoutAlign = "STRETCH";
-            previewRow.appendChild(colorPreview);
-            let displayHex = "";
-            try {
-              const fill = colorPreview.fills[0];
-              if (fill && fill.type === "SOLID" && fill.color) {
-                displayHex = figmaRGBToHex(fill.color);
-              }
-            } catch (e) {
-              console.error("Error extracting color from indicator:", e);
-            }
-            const textStack = createAutolayout("text-stack", "VERTICAL", 4);
-            previewRow.appendChild(textStack);
-            textStack.layoutSizingHorizontal = "FILL";
-            if (isAlias) {
-              const aliasName = sanitizeName(valueStr);
-              const labelText = makeText2(aliasName, FONT_REGULAR2, FONT_SIZE, false);
-              labelText.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [DARK];
-              labelText.layoutAlign = "STRETCH";
-              textStack.appendChild(labelText);
-              const hexText = makeText2(displayHex || valueStr, FONT_REGULAR2, FONT_SIZE, false);
-              hexText.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [COLOR_TEXT_SECONDARY];
-              hexText.layoutAlign = "STRETCH";
-              textStack.appendChild(hexText);
-            } else {
-              const hexText = makeText2(displayHex || valueStr, FONT_REGULAR2, FONT_SIZE, false);
-              hexText.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [COLOR_TEXT_SECONDARY];
-              hexText.layoutAlign = "STRETCH";
-              textStack.appendChild(hexText);
-            }
-          } else if (type === "BOOLEAN") {
-            const box = figma.createFrame();
-            const isTrue = String(valueStr).toLowerCase() === "true";
-            box.resizeWithoutConstraints(96, 50);
-            box.cornerRadius = 12;
-            box.fills = isTrue ? [DARK] : [];
-            box.strokes = [DARK];
-            box.strokeWeight = 2;
-            valueColumn.appendChild(box);
-          } else if (type === "FLOAT" && v.name.toLowerCase().includes("radius")) {
-            const radiusPreview = figma.createRectangle();
-            radiusPreview.resize(PREVIEW_WIDTH, PREVIEW_HEIGHT);
-            radiusPreview.fills = [COLOR_BG_LIGHT];
-            try {
-              radiusPreview.setBoundVariable("topLeftRadius", v);
-              radiusPreview.setBoundVariable("topRightRadius", v);
-              radiusPreview.setBoundVariable("bottomLeftRadius", v);
-              radiusPreview.setBoundVariable("bottomRightRadius", v);
-            } catch (e) {
-              const radiusValue = parseFloat(String(valueStr)) || 0;
-              radiusPreview.cornerRadius = radiusValue;
-            }
-            valueColumn.appendChild(radiusPreview);
-            const txt = makeText2(typeof valueStr === "string" ? sanitizeName(valueStr) : String(valueStr), font, FONT_SIZE);
-            txt.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [DARK];
-            valueColumn.appendChild(txt);
-          } else if (type === "FLOAT" && (v.name.toLowerCase().includes("space") || v.name.toLowerCase().includes("spacing") || v.name.toLowerCase().includes("gap"))) {
-            const spaceContainer = createAutolayout("space-preview", "HORIZONTAL", 0);
-            spaceContainer.counterAxisAlignItems = "CENTER";
-            valueColumn.appendChild(spaceContainer);
-            const leftEllipse = figma.createEllipse();
-            leftEllipse.resize(8, 8);
-            leftEllipse.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [COLOR_BORDER];
-            spaceContainer.appendChild(leftEllipse);
-            const spacePreview = figma.createRectangle();
-            spacePreview.resize(Math.max(parseFloat(String(valueStr)) || 1, 1), PREVIEW_HEIGHT);
-            spacePreview.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [COLOR_BG_LIGHT];
-            try {
-              spacePreview.setBoundVariable("width", v);
-            } catch (e) {
-            }
-            spaceContainer.appendChild(spacePreview);
-            const rightEllipse = figma.createEllipse();
-            rightEllipse.resize(8, 8);
-            rightEllipse.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [COLOR_BORDER];
-            spaceContainer.appendChild(rightEllipse);
-            const txt = makeText2(typeof valueStr === "string" ? sanitizeName(valueStr) : String(valueStr), font, FONT_SIZE);
-            txt.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [DARK];
-            valueColumn.appendChild(txt);
-          } else {
-            const txt = makeText2(typeof valueStr === "string" ? sanitizeName(valueStr) : String(valueStr), font, FONT_SIZE);
-            txt.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [DARK];
-            valueColumn.appendChild(txt);
+      if (!variables.length && allCollectionVariables.length && !allowAllGroups) {
+        figma.ui.postMessage({ type: "tokens-status", text: "No tokens matched selected groups in collection: " + c.name });
+      }
+      if (!variables.length) continue;
+      const mode = getCollectionPrimaryMode(c);
+      const grouped = groupByTokenPath(variables, (v) => v.name);
+      variablesFrame.appendChild(createTokenGroupTitle(c.name));
+      for (let gi = 0; gi < grouped.length; gi++) {
+        const group = grouped[gi];
+        const normalizedPath = normalizeGroupPathForCollection(group.path, c.name);
+        const subgroupLabel = getLeafGroupLabel(normalizedPath);
+        const subgroupDisplay = getParentAndLeafGroupLabel(normalizedPath);
+        variablesFrame.appendChild(createTokenSubgroupTitle(subgroupDisplay));
+        const section = createTokenTableSection("Variables - " + c.name + "-" + subgroupLabel);
+        variablesFrame.appendChild(section);
+        section.appendChild(createTokenHeaderRow(subgroupDisplay));
+        for (let i = 0; i < group.items.length; i++) {
+          const v = group.items[i];
+          if (onProgress) onProgress("Variable: " + v.name);
+          try {
+            const valueText = formatVariableCellValue(v, mode.modeId);
+            const preview = makeVariablePreview(v, mode.modeId);
+            appendTokenRow(
+              section,
+              "variable-row-" + v.id,
+              preview,
+              sanitizeName(getLeafTokenName(v.name)),
+              valueText,
+              v.description || "no description",
+              i === group.items.length - 1
+            );
+            count++;
+          } catch (e) {
+            skippedVariableRows.push(v.name);
+            const details = e && e.message ? e.message : String(e);
+            figma.ui.postMessage({ type: "tokens-status", text: "Skipped variable due to render error: " + v.name + " (" + details + ")" });
+            console.error("Token row render failed for variable", v.name, e);
           }
         }
       }
     }
   }
   async function writeStyles(onProgress) {
-    var _a, _b, _c, _d, _e;
-    const allModes = [];
-    for (const c of activeCollections) {
-      for (const m of c.modes) {
-        allModes.push({ collectionId: c.id, modeId: m.modeId, name: m.name });
+    await ensureTokenFontsLoaded();
+    function resolveTextStyleSizeForSort(style) {
+      try {
+        const ts = style;
+        if (typeof ts.fontSize === "number" && isFinite(ts.fontSize)) return ts.fontSize;
+        const bound = ts && typeof ts === "object" && ts.boundVariables && typeof ts.boundVariables === "object" ? ts.boundVariables : null;
+        const binding = bound && Object.prototype.hasOwnProperty.call(bound, "fontSize") ? bound.fontSize : null;
+        const variable = getVariableFromBinding(binding);
+        if (variable) {
+          const modeId = getVariablePreferredModeId(variable);
+          const raw = (variable.valuesByMode || {})[modeId];
+          const resolved = resolveAliasValueForMode(raw, modeId);
+          if (typeof resolved === "number" && isFinite(resolved)) return resolved;
+          const parsed = parseFloat(String(resolved != null ? resolved : ""));
+          if (isFinite(parsed)) return parsed;
+        }
+      } catch (e) {
       }
+      return 0;
     }
-    let modes = allModes.filter((m) => m.name !== DEFAULT_MODE_NAME);
-    if (modes.length === 0) {
-      modes = [{ collectionId: "", modeId: "", name: "Value" }];
+    function compareTextStylesBySizeDesc(a, b) {
+      const aSize = resolveTextStyleSizeForSort(a);
+      const bSize = resolveTextStyleSizeForSort(b);
+      if (bSize !== aSize) return bSize - aSize;
+      return naturalSort(a.name, b.name);
+    }
+    function writeStyleSection(sectionTitle, styles, previewFactory, valueFactory, sortWithinGroup, sortGroups) {
+      if (!styles.length) return;
+      stylesFrame.appendChild(createTokenGroupTitle(sectionTitle));
+      const grouped = groupByTokenPath(styles, (s) => s.name);
+      const orderedGroups = sortGroups ? grouped.slice().sort(sortGroups) : grouped;
+      for (let gi = 0; gi < orderedGroups.length; gi++) {
+        const group = orderedGroups[gi];
+        const items = sortWithinGroup ? group.items.slice().sort(sortWithinGroup) : group.items;
+        const subgroupLabel = getLeafGroupLabel(group.path);
+        const subgroupDisplay = getParentAndLeafGroupLabel(group.path);
+        stylesFrame.appendChild(createTokenSubgroupTitle(subgroupDisplay));
+        const section = createTokenTableSection(sectionTitle + "-" + subgroupLabel);
+        stylesFrame.appendChild(section);
+        section.appendChild(createTokenHeaderRow(subgroupDisplay));
+        for (let i = 0; i < items.length; i++) {
+          const s = items[i];
+          if (onProgress) onProgress(sectionTitle + ": " + s.name);
+          try {
+            appendTokenRow(
+              section,
+              sectionTitle + "-row-" + s.id,
+              previewFactory(s),
+              sanitizeName(getLeafTokenName(s.name)),
+              valueFactory(s),
+              s.description || "no description",
+              i === items.length - 1
+            );
+            count++;
+          } catch (e) {
+            skippedStyleRows.push(sectionTitle + "/" + s.name);
+            const details = e && e.message ? e.message : String(e);
+            figma.ui.postMessage({ type: "tokens-status", text: "Skipped style due to render error: " + s.name + " (" + details + ")" });
+            console.error("Token row render failed for style", sectionTitle, s.name, e);
+          }
+        }
+      }
     }
     const paintStyles = figma.getLocalPaintStyles().filter((s) => activeColorStyleIds.indexOf(s.id) !== -1).sort((a, b) => naturalSort(a.name, b.name));
-    if (paintStyles.length) {
-      const collectionBox = createAutolayout("Color", "VERTICAL", GAP_BETWEEN_SECTIONS, 0, 0);
-      collectionBox.fills = [LIGHT];
-      collectionBox.layoutSizingVertical = "HUG";
-      collectionBox.layoutSizingHorizontal = "HUG";
-      collectionBox.minWidth = MAX_COLUMN_WIDTH;
-      stylesFrame.appendChild(collectionBox);
-      const headerRow = createAutolayout("color-styles-header", "HORIZONTAL", GAP_BETWEEN_ROWS, 0, 0, "HUG");
-      collectionBox.appendChild(headerRow);
-      headerRow.layoutSizingHorizontal = "HUG";
-      headerRow.minWidth = MAX_COLUMN_WIDTH;
-      headerRow.strokes = [{ type: "SOLID", color: hexToRGB("#cccccc") }];
-      headerRow.strokeWeight = 1;
-      headerRow.dashPattern = [4, 4];
-      headerRow.strokeBottomWeight = 1;
-      headerRow.strokeTopWeight = 0;
-      headerRow.strokeLeftWeight = 0;
-      headerRow.strokeRightWeight = 0;
-      const leftHeader = createAutolayout("left-header", "VERTICAL", 4, ROW_PADDING, ROW_PADDING);
-      headerRow.appendChild(leftHeader);
-      leftHeader.layoutSizingHorizontal = "FIXED";
-      leftHeader.resizeWithoutConstraints(LEFT_COLUMN_WIDTH, leftHeader.height);
-      const cHeader = makeText2("Color", FONT_SEMIBOLD, L_FONT_SIZE);
-      addToColumn(leftHeader, cHeader);
-      for (const m of modes) {
-        const headerCell = createAutolayout("mode-header-" + m.modeId, "VERTICAL", 0, ROW_PADDING, ROW_PADDING);
-        headerRow.appendChild(headerCell);
-        headerCell.layoutSizingHorizontal = "HUG";
-        headerCell.layoutSizingVertical = "FILL";
-        headerCell.minWidth = MIN_MODE_COLUMN_WIDTH;
-        if (modes.length > 2) headerCell.maxWidth = 500;
-        headerCell.primaryAxisAlignItems = "CENTER";
-        headerCell.counterAxisAlignItems = "CENTER";
-        if (m.name.toLowerCase() === "dark") {
-          headerCell.fills = [COLOR_DARK_MODE_BG];
-          headerCell.topLeftRadius = 16;
-          headerCell.topRightRadius = 16;
-        }
-        const valueHeader = makeText2(m.name === DEFAULT_MODE_NAME && modes.length === 1 ? "Value" : m.name, FONT_SEMIBOLD, FONT_SIZE);
-        valueHeader.fills = m.name.toLowerCase() === "dark" ? [COLOR_DARK_MODE_TEXT] : [{ type: "SOLID", color: hexToRGB("#000000") }];
-        addToColumn(headerCell, valueHeader);
-        valueHeader.textAlignVertical = "CENTER";
-      }
-      for (const s of paintStyles) {
-        if (onProgress) onProgress("Color style: " + s.name);
-        const row = createAutolayout("row-" + s.name, "HORIZONTAL", GAP_BETWEEN_ROWS, 0, 0, "HUG");
-        collectionBox.appendChild(row);
-        row.layoutSizingHorizontal = "HUG";
-        row.minWidth = MAX_COLUMN_WIDTH;
-        const isLast = paintStyles.indexOf(s) === paintStyles.length - 1;
-        if (!isLast) {
-          row.strokes = [{ type: "SOLID", color: hexToRGB("#cccccc") }];
-          row.strokeWeight = 1;
-          row.dashPattern = [4, 4];
-          row.strokeBottomWeight = 1;
-          row.strokeTopWeight = 0;
-          row.strokeLeftWeight = 0;
-          row.strokeRightWeight = 0;
-        }
-        const leftCell = createAutolayout("left-" + s.name, "VERTICAL", 4);
-        row.appendChild(leftCell);
-        leftCell.layoutSizingHorizontal = "FIXED";
-        leftCell.resizeWithoutConstraints(LEFT_COLUMN_WIDTH, leftCell.height);
-        leftCell.paddingTop = ROW_PADDING;
-        leftCell.paddingBottom = ROW_PADDING;
-        leftCell.paddingLeft = ROW_PADDING;
-        leftCell.paddingRight = ROW_PADDING;
-        const sName = makeText2(sanitizeName(s.name), FONT_SEMIBOLD, FONT_SIZE);
-        addToColumn(leftCell, sName);
-        const sDesc = makeText2(s.description || "no description", FONT_REGULAR2, 14);
-        sDesc.fills = [COLOR_TEXT_SECONDARY];
-        addToColumn(leftCell, sDesc);
-        for (const m of modes) {
-          const isDark = m.name.toLowerCase() === "dark";
-          const isLastRow = paintStyles.indexOf(s) === paintStyles.length - 1;
-          const valueColumn = createAutolayout("value-" + s.name + "-" + m.modeId, "VERTICAL", isDark ? 8 : 8);
-          row.appendChild(valueColumn);
-          valueColumn.layoutSizingHorizontal = "HUG";
-          valueColumn.layoutSizingVertical = "FILL";
-          valueColumn.minWidth = MIN_MODE_COLUMN_WIDTH;
-          if (modes.length > 2) valueColumn.maxWidth = 500;
-          if (m.collectionId) {
-            valueColumn.setExplicitVariableModeForCollection(m.collectionId, m.modeId);
-          }
-          if (isDark) {
-            valueColumn.fills = [COLOR_DARK_MODE_BG];
-            valueColumn.strokes = [COLOR_DARK_MODE_BORDER];
-            valueColumn.strokeWeight = 1;
-            valueColumn.paddingTop = ROW_PADDING;
-            valueColumn.paddingBottom = ROW_PADDING;
-            valueColumn.paddingLeft = ROW_PADDING;
-            valueColumn.paddingRight = ROW_PADDING;
-            if (isLastRow) {
-              valueColumn.bottomLeftRadius = 16;
-              valueColumn.bottomRightRadius = 16;
-            }
-          } else {
-            valueColumn.fills = [];
-            valueColumn.paddingTop = ROW_PADDING;
-            valueColumn.paddingBottom = ROW_PADDING;
-            valueColumn.paddingLeft = ROW_PADDING;
-            valueColumn.paddingRight = ROW_PADDING;
-          }
-          const colorPreview = figma.createRectangle();
-          colorPreview.resize(PREVIEW_WIDTH, PREVIEW_HEIGHT);
-          colorPreview.cornerRadius = 24;
-          if (m.collectionId) {
-            colorPreview.setExplicitVariableModeForCollection(m.collectionId, m.modeId);
-          }
-          colorPreview.fillStyleId = s.id;
-          colorPreview.layoutAlign = "STRETCH";
-          valueColumn.appendChild(colorPreview);
-          const paints = s.paints || [];
-          if (paints.length > 0) {
-            const paint = paints[0];
-            if (paint.type === "SOLID" && paint.color) {
-              const hex = figmaRGBToHex(paint.color);
-              const hexTxt = makeText2(hex, FONT_REGULAR2, FONT_SIZE);
-              hexTxt.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [DARK];
-              valueColumn.appendChild(hexTxt);
-            } else if (paint.type && paint.type.includes("GRADIENT") && paint.gradientStops) {
-              const gtype = paint.type.replace(/^GRADIENT_?/i, "");
-              const gradientType = gtype.charAt(0).toUpperCase() + gtype.slice(1).toLowerCase();
-              const firstPos = Math.round((((_a = paint.gradientStops[0]) == null ? void 0 : _a.position) || 0) * 100) + "%";
-              const gradientHeader = makeText2(gradientType + " \u2014 " + firstPos, FONT_REGULAR2, FONT_SIZE);
-              gradientHeader.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [DARK];
-              valueColumn.appendChild(gradientHeader);
-              for (const stop of paint.gradientStops) {
-                const stopRow = createAutolayout("gradient-stop", "HORIZONTAL", GAP_SWATCH_ITEMS);
-                valueColumn.appendChild(stopRow);
-                let colorVar = null;
-                if (m.collectionId) {
-                  colorVar = resolveColorVariableForMode(stop.color, m.collectionId, m.modeId);
-                }
-                const swatchPreview = figma.createRectangle();
-                swatchPreview.resize(SWATCH_SIZE, SWATCH_SIZE);
-                swatchPreview.cornerRadius = BORDER_RADIUS_SM;
-                if (colorVar && m.collectionId) {
-                  swatchPreview.setExplicitVariableModeForCollection(m.collectionId, m.modeId);
-                  const swatchFills = JSON.parse(JSON.stringify(swatchPreview.fills));
-                  try {
-                    swatchFills[0] = figma.variables.setBoundVariableForPaint(swatchFills[0], "color", colorVar);
-                  } catch (e) {
-                  }
-                  swatchPreview.fills = swatchFills;
-                } else {
-                  const col = { r: stop.color.r || 0, g: stop.color.g || 0, b: stop.color.b || 0 };
-                  const alpha = stop.color.a !== void 0 ? stop.color.a : 1;
-                  swatchPreview.fills = [{ type: "SOLID", color: col, opacity: alpha }];
-                }
-                stopRow.appendChild(swatchPreview);
-                const label = colorVar ? sanitizeName(colorVar.name) : resolveColorLabel(stop.color);
-                const labelTxt = makeText2(label, FONT_REGULAR2, FONT_SIZE);
-                labelTxt.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [DARK];
-                stopRow.appendChild(labelTxt);
-                if (colorVar) {
-                  const hex = figmaRGBToHex(stop.color);
-                  const hexTxt = makeText2(hex, FONT_REGULAR2, FONT_SIZE);
-                  hexTxt.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [COLOR_TEXT_SECONDARY];
-                  stopRow.appendChild(hexTxt);
-                }
-              }
-              const lastPos = Math.round((((_b = paint.gradientStops[paint.gradientStops.length - 1]) == null ? void 0 : _b.position) || 1) * 100) + "%";
-              const gradientFooter = makeText2(lastPos, FONT_REGULAR2, FONT_SIZE);
-              gradientFooter.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [DARK];
-              valueColumn.appendChild(gradientFooter);
-            }
-          }
-        }
-      }
-    }
+    writeStyleSection("Color", paintStyles, (s) => makeStylePreview(s.id, "paint"), summarizePaintStyleValue);
     const effectStyles = figma.getLocalEffectStyles().filter((s) => activeEffectStyleIds.indexOf(s.id) !== -1).sort((a, b) => naturalSort(a.name, b.name));
-    if (effectStyles.length) {
-      const collectionBox = createAutolayout("Effects", "VERTICAL", GAP_BETWEEN_SECTIONS, 0, 0);
-      collectionBox.fills = [LIGHT];
-      collectionBox.layoutSizingVertical = "HUG";
-      collectionBox.layoutSizingHorizontal = "HUG";
-      collectionBox.minWidth = MAX_COLUMN_WIDTH;
-      stylesFrame.appendChild(collectionBox);
-      const headerRow = createAutolayout("effect-styles-header", "HORIZONTAL", GAP_BETWEEN_ROWS, 0, 0, "HUG");
-      collectionBox.appendChild(headerRow);
-      headerRow.layoutSizingHorizontal = "HUG";
-      headerRow.minWidth = MAX_COLUMN_WIDTH;
-      headerRow.strokes = [{ type: "SOLID", color: hexToRGB("#cccccc") }];
-      headerRow.strokeWeight = 1;
-      headerRow.dashPattern = [4, 4];
-      headerRow.strokeBottomWeight = 1;
-      headerRow.strokeTopWeight = 0;
-      headerRow.strokeLeftWeight = 0;
-      headerRow.strokeRightWeight = 0;
-      const leftHeader = createAutolayout("left-header", "VERTICAL", 4, ROW_PADDING, ROW_PADDING);
-      headerRow.appendChild(leftHeader);
-      leftHeader.layoutSizingHorizontal = "FIXED";
-      leftHeader.resizeWithoutConstraints(LEFT_COLUMN_WIDTH, leftHeader.height);
-      const cHeader = makeText2("Effects", FONT_SEMIBOLD, L_FONT_SIZE);
-      addToColumn(leftHeader, cHeader);
-      for (const m of modes) {
-        const headerCell = createAutolayout("mode-header-" + m.modeId, "VERTICAL", 0, ROW_PADDING, ROW_PADDING);
-        headerRow.appendChild(headerCell);
-        headerCell.layoutSizingHorizontal = "HUG";
-        headerCell.layoutSizingVertical = "FILL";
-        headerCell.minWidth = MIN_MODE_COLUMN_WIDTH;
-        if (modes.length > 2) headerCell.maxWidth = 500;
-        headerCell.primaryAxisAlignItems = "CENTER";
-        headerCell.counterAxisAlignItems = "CENTER";
-        if (m.name.toLowerCase() === "dark") {
-          headerCell.fills = [COLOR_DARK_MODE_BG];
-          headerCell.topLeftRadius = 16;
-          headerCell.topRightRadius = 16;
-        }
-        const valueHeader = makeText2(m.name === DEFAULT_MODE_NAME && modes.length === 1 ? "Value" : m.name, FONT_SEMIBOLD, FONT_SIZE);
-        valueHeader.fills = m.name.toLowerCase() === "dark" ? [COLOR_DARK_MODE_TEXT] : [{ type: "SOLID", color: hexToRGB("#000000") }];
-        addToColumn(headerCell, valueHeader);
-        valueHeader.textAlignVertical = "CENTER";
+    writeStyleSection("Effects", effectStyles, (s) => makeStylePreview(s.id, "effect"), summarizeEffectStyleValue);
+    const textStyles = figma.getLocalTextStyles().filter((s) => activeTextStyleIds.indexOf(s.id) !== -1).sort((a, b) => compareTextStylesBySizeDesc(a, b));
+    writeStyleSection(
+      "Text",
+      textStyles,
+      (s) => makeStylePreview(s.id, "text"),
+      summarizeTextStyleValue,
+      compareTextStylesBySizeDesc,
+      (a, b) => {
+        const maxA = a.items.reduce((m, s) => Math.max(m, resolveTextStyleSizeForSort(s)), 0);
+        const maxB = b.items.reduce((m, s) => Math.max(m, resolveTextStyleSizeForSort(s)), 0);
+        if (maxB !== maxA) return maxB - maxA;
+        return naturalSort(a.path, b.path);
       }
-      for (const s of effectStyles) {
-        if (onProgress) onProgress("Effect style: " + s.name);
-        const row = createAutolayout("row-" + s.name, "HORIZONTAL", GAP_BETWEEN_ROWS, 0, 0, "HUG");
-        collectionBox.appendChild(row);
-        row.layoutSizingHorizontal = "HUG";
-        row.minWidth = MAX_COLUMN_WIDTH;
-        const isLast = effectStyles.indexOf(s) === effectStyles.length - 1;
-        if (!isLast) {
-          row.strokes = [{ type: "SOLID", color: hexToRGB("#cccccc") }];
-          row.strokeWeight = 1;
-          row.dashPattern = [4, 4];
-          row.strokeBottomWeight = 1;
-          row.strokeTopWeight = 0;
-          row.strokeLeftWeight = 0;
-          row.strokeRightWeight = 0;
-        }
-        const leftCell = createAutolayout("left-" + s.name, "VERTICAL", 4);
-        row.appendChild(leftCell);
-        leftCell.layoutSizingHorizontal = "FIXED";
-        leftCell.resizeWithoutConstraints(LEFT_COLUMN_WIDTH, leftCell.height);
-        leftCell.paddingTop = ROW_PADDING;
-        leftCell.paddingBottom = ROW_PADDING;
-        leftCell.paddingLeft = ROW_PADDING;
-        leftCell.paddingRight = ROW_PADDING;
-        const sName = makeText2(sanitizeName(s.name), FONT_SEMIBOLD, FONT_SIZE);
-        addToColumn(leftCell, sName);
-        const sDesc = makeText2(s.description || "no description", FONT_REGULAR2, 14);
-        sDesc.fills = [COLOR_TEXT_SECONDARY];
-        addToColumn(leftCell, sDesc);
-        for (const m of modes) {
-          const isDark = m.name.toLowerCase() === "dark";
-          const isLastRow = effectStyles.indexOf(s) === effectStyles.length - 1;
-          const valueColumn = createAutolayout("value-" + s.name + "-" + m.modeId, "VERTICAL", isDark ? 8 : 8);
-          row.appendChild(valueColumn);
-          valueColumn.layoutSizingHorizontal = "HUG";
-          valueColumn.layoutSizingVertical = "FILL";
-          valueColumn.minWidth = MIN_MODE_COLUMN_WIDTH;
-          if (modes.length > 2) valueColumn.maxWidth = 500;
-          if (m.collectionId) {
-            valueColumn.setExplicitVariableModeForCollection(m.collectionId, m.modeId);
-          }
-          if (isDark) {
-            valueColumn.fills = [COLOR_DARK_MODE_BG];
-            valueColumn.strokes = [COLOR_DARK_MODE_BORDER];
-            valueColumn.strokeWeight = 1;
-            valueColumn.paddingTop = ROW_PADDING;
-            valueColumn.paddingBottom = ROW_PADDING;
-            valueColumn.paddingLeft = ROW_PADDING;
-            valueColumn.paddingRight = ROW_PADDING;
-            if (isLastRow) {
-              valueColumn.bottomLeftRadius = 16;
-              valueColumn.bottomRightRadius = 16;
-            }
-          } else {
-            valueColumn.fills = [];
-            valueColumn.paddingTop = ROW_PADDING;
-            valueColumn.paddingBottom = ROW_PADDING;
-            valueColumn.paddingLeft = ROW_PADDING;
-            valueColumn.paddingRight = ROW_PADDING;
-          }
-          const effectPreview = figma.createRectangle();
-          effectPreview.resize(PREVIEW_WIDTH, PREVIEW_HEIGHT);
-          effectPreview.cornerRadius = 6;
-          effectPreview.fills = [{ type: "SOLID", color: hexToRGB("#ffffff") }];
-          if (m.collectionId) {
-            effectPreview.setExplicitVariableModeForCollection(m.collectionId, m.modeId);
-          }
-          effectPreview.effectStyleId = s.id;
-          effectPreview.layoutAlign = "STRETCH";
-          valueColumn.appendChild(effectPreview);
-          const effects = s.effects || [];
-          if (effects.length > 0) {
-            for (const effect of effects) {
-              let effectText = "";
-              if (effect.type === "DROP_SHADOW" || effect.type === "INNER_SHADOW") {
-                const ox = Math.round(((_c = effect.offset) == null ? void 0 : _c.x) || 0);
-                const oy = Math.round(((_d = effect.offset) == null ? void 0 : _d.y) || 0);
-                const blur = Math.round(effect.radius || 0);
-                const alpha = ((_e = effect.color) == null ? void 0 : _e.a) !== void 0 ? effect.color.a : 1;
-                effectText = `${effect.type.replace("_", " ").toLowerCase()}: ${ox}x ${oy}y ${blur}px ${Math.round(alpha * 100)}%`;
-              } else if (effect.type === "LAYER_BLUR" || effect.type === "BACKGROUND_BLUR") {
-                const blur = Math.round(effect.radius || 0);
-                effectText = `${effect.type.replace("_", " ").toLowerCase()}: ${blur}px`;
-              } else {
-                effectText = effect.type.replace("_", " ").toLowerCase();
-              }
-              const txt = makeText2(effectText, FONT_REGULAR2, FONT_SIZE);
-              txt.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [COLOR_TEXT_SECONDARY];
-              valueColumn.appendChild(txt);
-            }
-          }
-        }
-      }
-    }
-    const textStyles = figma.getLocalTextStyles().filter((s) => activeTextStyleIds.indexOf(s.id) !== -1).sort((a, b) => naturalSort(a.name, b.name));
-    if (textStyles.length) {
-      const collectionBox = createAutolayout("Text", "VERTICAL", GAP_BETWEEN_SECTIONS, 0, 0);
-      collectionBox.fills = [LIGHT];
-      collectionBox.layoutSizingVertical = "HUG";
-      collectionBox.layoutSizingHorizontal = "HUG";
-      collectionBox.minWidth = MAX_COLUMN_WIDTH;
-      stylesFrame.appendChild(collectionBox);
-      const headerRow = createAutolayout("text-styles-header", "HORIZONTAL", GAP_BETWEEN_ROWS, 0, 0, "HUG");
-      collectionBox.appendChild(headerRow);
-      headerRow.layoutSizingHorizontal = "HUG";
-      headerRow.minWidth = MAX_COLUMN_WIDTH;
-      headerRow.strokes = [{ type: "SOLID", color: hexToRGB("#cccccc") }];
-      headerRow.strokeWeight = 1;
-      headerRow.dashPattern = [4, 4];
-      headerRow.strokeBottomWeight = 1;
-      headerRow.strokeTopWeight = 0;
-      headerRow.strokeLeftWeight = 0;
-      headerRow.strokeRightWeight = 0;
-      const leftHeaderT = createAutolayout("left-header", "VERTICAL", 4, ROW_PADDING, ROW_PADDING);
-      headerRow.appendChild(leftHeaderT);
-      leftHeaderT.layoutSizingHorizontal = "FIXED";
-      leftHeaderT.resizeWithoutConstraints(LEFT_COLUMN_WIDTH, leftHeaderT.height);
-      const tHeader = makeText2("Text", FONT_SEMIBOLD, L_FONT_SIZE);
-      addToColumn(leftHeaderT, tHeader);
-      const headerCellPreviewT = createAutolayout("value-header-cell", "VERTICAL", 0, ROW_PADDING, ROW_PADDING, "FILL");
-      headerRow.appendChild(headerCellPreviewT);
-      headerCellPreviewT.layoutSizingHorizontal = "FILL";
-      const valueHeaderT = makeText2("Value", FONT_SEMIBOLD, FONT_SIZE);
-      addToColumn(headerCellPreviewT, valueHeaderT);
-      valueHeaderT.textAlignVertical = "CENTER";
-      for (const s of textStyles) {
-        if (onProgress) onProgress("Text style: " + s.name);
-        const row = createAutolayout("text-row-" + s.name, "HORIZONTAL", GAP_BETWEEN_ROWS, ROW_PADDING, ROW_PADDING, "HUG");
-        collectionBox.appendChild(row);
-        row.layoutSizingHorizontal = "HUG";
-        row.minWidth = MAX_COLUMN_WIDTH;
-        const isLast = textStyles.indexOf(s) === textStyles.length - 1;
-        if (!isLast) {
-          row.strokes = [{ type: "SOLID", color: hexToRGB("#cccccc") }];
-          row.strokeWeight = 1;
-          row.dashPattern = [4, 4];
-          row.strokeBottomWeight = 1;
-          row.strokeTopWeight = 0;
-          row.strokeLeftWeight = 0;
-          row.strokeRightWeight = 0;
-        }
-        const leftCell = createAutolayout("left-" + s.name, "VERTICAL", 4);
-        row.appendChild(leftCell);
-        leftCell.layoutSizingHorizontal = "FIXED";
-        leftCell.resizeWithoutConstraints(LEFT_COLUMN_WIDTH, leftCell.height);
-        const sName = makeText2(sanitizeName(s.name), FONT_SEMIBOLD, FONT_SIZE);
-        addToColumn(leftCell, sName);
-        const sDesc = makeText2(s.description || "no description", FONT_REGULAR2, 14);
-        sDesc.fills = [COLOR_TEXT_SECONDARY];
-        addToColumn(leftCell, sDesc);
-        const valueCell = createAutolayout("value-" + s.name, "VERTICAL", 6);
-        row.appendChild(valueCell);
-        valueCell.layoutSizingHorizontal = "HUG";
-        valueCell.minWidth = MIN_MODE_COLUMN_WIDTH;
-        const previewText = makeText2(sanitizeName(s.name), FONT_REGULAR2, FONT_SIZE);
-        try {
-          previewText.textStyleId = s.id;
-        } catch (e) {
-          try {
-            if (s.fontName) previewText.fontName = s.fontName;
-            if (s.fontSize) previewText.fontSize = s.fontSize;
-          } catch (e2) {
-          }
-        }
-        previewText.layoutAlign = "STRETCH";
-        valueCell.appendChild(previewText);
-        const ts = s;
-        if (ts.fontName) {
-          const fontFamily = typeof ts.fontName === "object" && ts.fontName.family ? ts.fontName.family : typeof ts.fontName === "string" ? ts.fontName : "";
-          if (fontFamily) {
-            const fontFamilyTxt = makeText2("fontFamily: " + fontFamily, FONT_REGULAR2, 18);
-            fontFamilyTxt.fills = [COLOR_TEXT_SECONDARY];
-            fontFamilyTxt.layoutAlign = "STRETCH";
-            valueCell.appendChild(fontFamilyTxt);
-          }
-          const fontStyle = typeof ts.fontName === "object" && ts.fontName.style ? ts.fontName.style : "";
-          if (fontStyle) {
-            const fontWeightTxt = makeText2("fontWeight: " + fontStyle, FONT_REGULAR2, 18);
-            fontWeightTxt.fills = [COLOR_TEXT_SECONDARY];
-            fontWeightTxt.layoutAlign = "STRETCH";
-            valueCell.appendChild(fontWeightTxt);
-          }
-        }
-        if (typeof ts.fontSize !== "undefined" && ts.fontSize !== null) {
-          const fontSizeTxt = makeText2("fontSize: " + ts.fontSize + "px", FONT_REGULAR2, 18);
-          fontSizeTxt.fills = [COLOR_TEXT_SECONDARY];
-          fontSizeTxt.layoutAlign = "STRETCH";
-          valueCell.appendChild(fontSizeTxt);
-        }
-        if (typeof ts.lineHeight !== "undefined" && ts.lineHeight !== null) {
-          const lh = typeof ts.lineHeight === "object" && ts.lineHeight.value !== void 0 ? ts.lineHeight.value : ts.lineHeight;
-          const unit = typeof ts.lineHeight === "object" && ts.lineHeight.unit ? ts.lineHeight.unit : "%";
-          const displayUnit = unit === "PERCENT" ? "%" : unit;
-          const displayValue = unit === "PERCENT" ? Math.round(lh * 100) / 100 : lh;
-          const lineHeightTxt = makeText2("lineHeight: " + displayValue + displayUnit, FONT_REGULAR2, 18);
-          lineHeightTxt.fills = [COLOR_TEXT_SECONDARY];
-          lineHeightTxt.layoutAlign = "STRETCH";
-          valueCell.appendChild(lineHeightTxt);
-        }
-        if (typeof ts.letterSpacing !== "undefined" && ts.letterSpacing !== null) {
-          const ls = typeof ts.letterSpacing === "object" && ts.letterSpacing.value !== void 0 ? ts.letterSpacing.value : ts.letterSpacing;
-          const unit = typeof ts.letterSpacing === "object" && ts.letterSpacing.unit ? ts.letterSpacing.unit : "px";
-          const displayUnit = unit === "PERCENT" ? "%" : unit;
-          const displayValue = unit === "PERCENT" ? Math.round(ls * 100) / 100 : ls;
-          const letterSpacingTxt = makeText2("letterSpacing: " + displayValue + displayUnit, FONT_REGULAR2, 18);
-          letterSpacingTxt.fills = [COLOR_TEXT_SECONDARY];
-          letterSpacingTxt.layoutAlign = "STRETCH";
-          valueCell.appendChild(letterSpacingTxt);
-        }
-        if (typeof ts.paragraphSpacing !== "undefined" && ts.paragraphSpacing !== null) {
-          const unit = ts.paragraphSpacingUnit || "px";
-          const paragraphSpacingTxt = makeText2("paragraphSpacing: " + ts.paragraphSpacing + unit, FONT_REGULAR2, 18);
-          paragraphSpacingTxt.fills = [COLOR_TEXT_SECONDARY];
-          paragraphSpacingTxt.layoutAlign = "STRETCH";
-          valueCell.appendChild(paragraphSpacingTxt);
-        }
-      }
-    }
+    );
     const layoutStyles = figma.getLocalGridStyles().filter((s) => activeLayoutStyleIds.indexOf(s.id) !== -1).sort((a, b) => naturalSort(a.name, b.name));
-    try {
-      for (const child of figma.currentPage.children.slice()) {
-        if (child.name && child.name.startsWith && child.name.startsWith("grid-")) {
-          if (child.parent === figma.currentPage) child.remove();
-        }
-      }
-    } catch (e) {
-    }
-    if (layoutStyles.length) {
-      const collectionBox = createAutolayout("Layout", "VERTICAL", GAP_BETWEEN_SECTIONS, 0, 0);
-      collectionBox.fills = [LIGHT];
-      collectionBox.layoutSizingVertical = "HUG";
-      collectionBox.layoutSizingHorizontal = "HUG";
-      collectionBox.minWidth = MAX_COLUMN_WIDTH;
-      stylesFrame.appendChild(collectionBox);
-      const headerRow = createAutolayout("layout-styles-header", "HORIZONTAL", GAP_BETWEEN_ROWS, 0, 0, "HUG");
-      collectionBox.appendChild(headerRow);
-      headerRow.layoutSizingHorizontal = "HUG";
-      headerRow.minWidth = MAX_COLUMN_WIDTH;
-      headerRow.strokes = [{ type: "SOLID", color: hexToRGB("#cccccc") }];
-      headerRow.strokeWeight = 1;
-      headerRow.dashPattern = [4, 4];
-      headerRow.strokeBottomWeight = 1;
-      headerRow.strokeTopWeight = 0;
-      headerRow.strokeLeftWeight = 0;
-      headerRow.strokeRightWeight = 0;
-      const leftHeaderL = createAutolayout("left-header", "VERTICAL", 4, ROW_PADDING, ROW_PADDING);
-      headerRow.appendChild(leftHeaderL);
-      leftHeaderL.layoutSizingHorizontal = "FIXED";
-      leftHeaderL.resizeWithoutConstraints(LEFT_COLUMN_WIDTH, leftHeaderL.height);
-      const lHeader = makeText2("Layout", FONT_SEMIBOLD, L_FONT_SIZE);
-      addToColumn(leftHeaderL, lHeader);
-      const headerCellPreviewL = createAutolayout("value-header-cell", "VERTICAL", 0, ROW_PADDING, ROW_PADDING, "FILL");
-      headerRow.appendChild(headerCellPreviewL);
-      headerCellPreviewL.layoutSizingHorizontal = "FILL";
-      const valueHeaderL = makeText2("Value", FONT_SEMIBOLD, FONT_SIZE);
-      addToColumn(headerCellPreviewL, valueHeaderL);
-      valueHeaderL.textAlignVertical = "CENTER";
-      for (const s of layoutStyles) {
-        if (onProgress) onProgress("Layout style: " + s.name);
-        const row = createAutolayout("layout-row-" + s.name, "HORIZONTAL", GAP_BETWEEN_ROWS, ROW_PADDING, ROW_PADDING, "HUG");
-        collectionBox.appendChild(row);
-        row.layoutSizingHorizontal = "HUG";
-        row.minWidth = MAX_COLUMN_WIDTH;
-        const isLast = layoutStyles.indexOf(s) === layoutStyles.length - 1;
-        if (!isLast) {
-          row.strokes = [{ type: "SOLID", color: hexToRGB("#cccccc") }];
-          row.strokeWeight = 1;
-          row.dashPattern = [4, 4];
-          row.strokeBottomWeight = 1;
-          row.strokeTopWeight = 0;
-          row.strokeLeftWeight = 0;
-          row.strokeRightWeight = 0;
-        }
-        const leftCell = createAutolayout("left-" + s.name, "VERTICAL", 4);
-        row.appendChild(leftCell);
-        leftCell.layoutSizingHorizontal = "FIXED";
-        leftCell.resizeWithoutConstraints(LEFT_COLUMN_WIDTH, leftCell.height);
-        const sName = makeText2(sanitizeName(s.name), FONT_SEMIBOLD, FONT_SIZE);
-        addToColumn(leftCell, sName);
-        const sDesc = makeText2(s.description || "no description", FONT_REGULAR2, 14);
-        sDesc.fills = [COLOR_TEXT_SECONDARY];
-        addToColumn(leftCell, sDesc);
-        const valueCell = createAutolayout("value-" + s.name, "VERTICAL", 6);
-        row.appendChild(valueCell);
-        valueCell.layoutSizingHorizontal = "FILL";
-        const grids = s.layoutGrids || [];
-        if (grids.length === 0) {
-          const info = makeText2("No grids defined", FONT_REGULAR2, FONT_SIZE);
-          valueCell.appendChild(info);
-        } else {
-          for (const g of grids) {
-            const pattern = g.pattern || "COLUMNS";
-            const patternLabel = pattern === "COLUMNS" ? "Columns" : pattern === "ROWS" ? "Rows" : "Grid";
-            const gridBox = createAutolayout("grid-" + patternLabel, "VERTICAL", 6, 6, 6, "FILL");
-            gridBox.fills = [];
-            gridBox.resizeWithoutConstraints(260, 80);
-            const header = makeText2(patternLabel, FONT_SEMIBOLD, FONT_SIZE);
-            addToColumn(gridBox, header);
-            const infoRow = createAutolayout("grid-info", "HORIZONTAL", GAP_SWATCH_ITEMS);
-            const countTxt = makeText2("Count: " + (g.count !== void 0 ? String(g.count) : "-"), FONT_REGULAR2, FONT_SIZE);
-            addToColumn(infoRow, countTxt);
-            const gutterTxt = makeText2("Gutter: " + (g.gutterSize !== void 0 ? String(g.gutterSize) : "-"), FONT_REGULAR2, FONT_SIZE);
-            addToColumn(infoRow, gutterTxt);
-            const offsetTxt = makeText2("Margin: " + (g.offset !== void 0 ? String(g.offset) : "-"), FONT_REGULAR2, FONT_SIZE);
-            addToColumn(infoRow, offsetTxt);
-            const sizeUnit = g.sectionSizeUnit || (g.sectionSize ? "px" : "");
-            const widthTxt = makeText2("Width: " + (g.sectionSize !== void 0 ? String(g.sectionSize) + sizeUnit : "Auto"), FONT_REGULAR2, FONT_SIZE);
-            addToColumn(infoRow, widthTxt);
-            gridBox.appendChild(infoRow);
-            const typeTxt = makeText2("Type: " + (g.alignment || (g.sectionSize ? "Fixed" : "Stretch")), FONT_REGULAR2, FONT_SIZE);
-            addToColumn(gridBox, typeTxt);
-            if (g.color) {
-              const swatchRow = createAutolayout("swatch-row", "HORIZONTAL", GAP_SWATCH_ITEMS);
-              const gridColorPreview = figma.createRectangle();
-              gridColorPreview.resize(PREVIEW_WIDTH, PREVIEW_HEIGHT);
-              const colorObj = g.color;
-              const col = { r: colorObj.r || 0, g: colorObj.g || 0, b: colorObj.b || 0 };
-              const alpha = colorObj.a !== void 0 ? colorObj.a : 1;
-              gridColorPreview.fills = [{ type: "SOLID", color: col, opacity: alpha }];
-              addToColumn(swatchRow, gridColorPreview);
-              const hex = figmaRGBToHex(colorObj);
-              const hexTxt = makeText2(hex + (alpha !== 1 ? " " + Math.round(alpha * 100) + "%" : ""), FONT_REGULAR2, FONT_SIZE);
-              addToColumn(swatchRow, hexTxt);
-              gridBox.appendChild(swatchRow);
-            }
-            const previewHeight = 50;
-            const previewWidth = Math.min(MAX_COLUMN_WIDTH / 2, 720);
-            const preview = createAutolayout("grid-preview", "HORIZONTAL", g.gutterSize || 8, Math.max(0, g.offset || 0), 0);
-            gridBox.appendChild(preview);
-            preview.resizeWithoutConstraints(previewWidth, previewHeight);
-            const previewCount = Math.min(g.count || 1, 8);
-            for (let i = 0; i < previewCount; i++) {
-              const columnPreview = figma.createRectangle();
-              if (g.sectionSize && g.sectionSize > 0) {
-                columnPreview.resizeWithoutConstraints(Math.max(8, g.sectionSize), previewHeight);
-              } else {
-                columnPreview.resizeWithoutConstraints(20, previewHeight);
-                columnPreview.layoutGrow = 1;
-              }
-              if (g.color) {
-                const colorObj = g.color;
-                const col = { r: colorObj.r || 0, g: colorObj.g || 0, b: colorObj.b || 0 };
-                const alpha = colorObj.a !== void 0 ? colorObj.a : 1;
-                columnPreview.fills = [{ type: "SOLID", color: col, opacity: alpha }];
-              } else {
-                columnPreview.fills = [COLOR_BG_LIGHT];
-              }
-              preview.appendChild(columnPreview);
-            }
-            if ((g.count || 0) > previewCount) {
-              const more = makeText2("\u2026 (" + (g.count || 0) + " total)", FONT_REGULAR2, FONT_SIZE);
-              addToColumn(gridBox, more);
-            }
-            addToColumn(valueCell, gridBox);
-            gridBox.layoutSizingHorizontal = "FILL";
-            preview.layoutSizingHorizontal = "FILL";
-          }
-        }
-      }
-    }
+    writeStyleSection("Layout", layoutStyles, (s) => makeStylePreview(s.id, "layout"), summarizeLayoutStyleValue);
   }
   function makeText2(text, font, size, truncate = false) {
     const node = figma.createText();
@@ -5481,7 +5983,7 @@
     autolayout.paddingTop = paddingY;
     autolayout.paddingBottom = paddingY;
     if (sizingX !== "FILL") autolayout.layoutSizingHorizontal = sizingX;
-    autolayout.layoutSizingVertical = sizingY;
+    if (sizingY !== "FILL") autolayout.layoutSizingVertical = sizingY;
     return autolayout;
   }
   function finish(message = void 0) {
@@ -5493,11 +5995,18 @@
       text = message;
     } else if (count > 0) {
       text = CONFIRM_MSGS[Math.floor(Math.random() * CONFIRM_MSGS.length)] + " " + ACTION_MSGS[Math.floor(Math.random() * ACTION_MSGS.length)] + " " + (count === 1 ? "only one variable" : count + " variables");
+    } else if (skippedVariableRows.length || skippedStyleRows.length) {
+      var skippedVarSample = skippedVariableRows.slice(0, 3);
+      var skippedStyleSample = skippedStyleRows.slice(0, 3);
+      var skippedDetails = [];
+      if (skippedVarSample.length) skippedDetails.push("variables: " + skippedVarSample.join(", "));
+      if (skippedStyleSample.length) skippedDetails.push("styles: " + skippedStyleSample.join(", "));
+      text = "No rows rendered. Skipped " + (skippedVariableRows.length + skippedStyleRows.length) + " items (" + skippedDetails.join(" | ") + ")";
     } else text = IDLE_MSGS[Math.floor(Math.random() * IDLE_MSGS.length)];
     notify(text);
     try {
       figma.ui.postMessage({ type: "tokens-status", text });
-      figma.ui.postMessage({ type: "tokens-resync-state", available: !!findTokensDocFrame() });
+      figma.ui.postMessage({ type: "tokens-resync-state", available: !!getSelectedTokensDocFrame() });
     } catch (e) {
     }
   }
@@ -5537,78 +6046,6 @@
     }
     return hex;
   }
-  function resolveColorLabel(color) {
-    try {
-      const hex = figmaRGBToHex(color);
-      if (collections && Array.isArray(collections)) {
-        for (const c of collections) {
-          for (const id of c.variableIds) {
-            const v = figma.variables.getVariableById(id);
-            if (!v) continue;
-            const modes = v.valuesByMode || {};
-            for (const mid in modes) {
-              const raw = modes[mid];
-              if (raw && typeof raw === "object") {
-                try {
-                  if (figmaRGBToHex(raw) === hex) return sanitizeName(v.name);
-                } catch (e) {
-                }
-              }
-            }
-          }
-        }
-      }
-      const paints = figma.getLocalPaintStyles();
-      for (const s of paints) {
-        if (s.paints && s.paints[0] && s.paints[0].type === "SOLID" && s.paints[0].color) {
-          try {
-            if (figmaRGBToHex(s.paints[0].color) === hex) return sanitizeName(s.name);
-          } catch (e) {
-          }
-        }
-      }
-      return hex;
-    } catch (e) {
-      return String(color);
-    }
-  }
-  function resolveColorVariableForMode(color, collectionId, modeId) {
-    try {
-      const hex = figmaRGBToHex(color);
-      const targetCollection = figma.variables.getVariableCollectionById(collectionId);
-      if (targetCollection) {
-        for (const id of targetCollection.variableIds) {
-          const v = figma.variables.getVariableById(id);
-          if (!v || v.resolvedType !== "COLOR") continue;
-          const raw = v.valuesByMode[modeId];
-          if (raw && typeof raw === "object") {
-            try {
-              if (figmaRGBToHex(raw) === hex) return v;
-            } catch (e) {
-            }
-          }
-        }
-      }
-      if (collections && Array.isArray(collections)) {
-        for (const c of collections) {
-          for (const id of c.variableIds) {
-            const v = figma.variables.getVariableById(id);
-            if (!v || v.resolvedType !== "COLOR") continue;
-            const raw = v.valuesByMode[modeId];
-            if (raw && typeof raw === "object") {
-              try {
-                if (figmaRGBToHex(raw) === hex) return v;
-              } catch (e) {
-              }
-            }
-          }
-        }
-      }
-      return null;
-    } catch (e) {
-      return null;
-    }
-  }
 
   // src/main.ts
   var command = figma.command || "";
@@ -5616,10 +6053,19 @@
     handleCreateAutoLayout();
     figma.closePlugin();
   } else {
-    initialTab = command === "variables" || command === "rewrite" ? "tokens" : "component";
+    tokenResyncStateAtOpen = getTokensResyncState();
+    initialTab = command === "variables" || command === "rewrite" || tokenResyncStateAtOpen.available ? "tokens" : "component";
     isTokens = initialTab === "tokens";
-    figma.showUI(__html__, { width: isTokens ? 560 : 320, height: isTokens ? 500 : 460 });
+    figma.showUI(__html__, { width: isTokens ? 320 : 320, height: isTokens ? 460 : 460 });
     registerSpecSelectionTracking();
+    figma.on("selectionchange", function() {
+      var state = getTokensResyncState();
+      if (state.available) {
+        figma.ui.postMessage({ type: "set-tab", tab: "tokens" });
+      }
+      figma.ui.postMessage(getTokensInitData());
+      figma.ui.postMessage({ type: "tokens-resync-state", available: state.available });
+    });
     figma.ui.onmessage = function(msg) {
       if (!msg || !msg.type) return;
       if (msg.type === "ui-ready") {
@@ -5637,12 +6083,13 @@
         return;
       }
       if (msg.type === "tokens-resync") {
-        handleTokensResync();
+        handleTokensResync(msg);
         return;
       }
       handleSpecMessage(msg);
     };
   }
+  var tokenResyncStateAtOpen;
   var initialTab;
   var isTokens;
 })();

@@ -10,7 +10,7 @@
 //   "Refresh variables" relaunch button → Tokens tab (rewrite flow)
 //   "Wrap in auto layout" relaunch      → headless, no UI
 import { registerSpecSelectionTracking, pushSpecSelectionState, handleSpecMessage } from './spec';
-import { getTokensInitData, handleTokensConfirm, handleTokensResync, handleCreateAutoLayout } from './variables';
+import { getTokensInitData, getTokensResyncState, handleTokensConfirm, handleTokensResync, handleCreateAutoLayout } from './variables';
 
 var command = figma.command || '';
 
@@ -18,10 +18,19 @@ if (command === 'create-autolayout') {
   handleCreateAutoLayout();
   figma.closePlugin();
 } else {
-  var initialTab = (command === 'variables' || command === 'rewrite') ? 'tokens' : 'component';
+  var tokenResyncStateAtOpen = getTokensResyncState();
+  var initialTab = (command === 'variables' || command === 'rewrite' || tokenResyncStateAtOpen.available) ? 'tokens' : 'component';
   var isTokens = initialTab === 'tokens';
-  figma.showUI(__html__, { width: isTokens ? 560 : 320, height: isTokens ? 500 : 460 });
+  figma.showUI(__html__, { width: isTokens ? 320 : 320, height: isTokens ? 460 : 460 });
   registerSpecSelectionTracking();
+  figma.on('selectionchange', function() {
+    var state = getTokensResyncState();
+    if (state.available) {
+      figma.ui.postMessage({ type: 'set-tab', tab: 'tokens' });
+    }
+    figma.ui.postMessage(getTokensInitData());
+    figma.ui.postMessage({ type: 'tokens-resync-state', available: state.available });
+  });
 
   figma.ui.onmessage = function(msg: any) {
     if (!msg || !msg.type) return;
@@ -41,7 +50,7 @@ if (command === 'create-autolayout') {
       return;
     }
     if (msg.type === 'tokens-resync') {
-      handleTokensResync();
+      handleTokensResync(msg);
       return;
     }
     // Component tab messages: generate-specs, resync-specs, clear-specs, close

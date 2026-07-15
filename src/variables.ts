@@ -15,6 +15,8 @@ let notification: NotificationHandler
 let selection: ReadonlyArray<SceneNode>
 let working: boolean
 let count: number = 0
+let skippedVariableRows: string[] = []
+let skippedStyleRows: string[] = []
 
 // Utility functions
 function sanitizeName(name: string) {
@@ -56,9 +58,9 @@ function naturalSort(a: string, b: string): number {
 
 // Font and color constants
 
-const FONT_REGULAR: FontName = { family: 'Inter', style: 'Regular' }
-const FONT_SEMIBOLD: FontName = { family: 'Inter', style: 'Semi Bold' }
-const FONT_ITALIC: FontName = { family: 'Inter', style: 'Italic' }
+let FONT_REGULAR: FontName = { family: 'Inter', style: 'Regular' }
+let FONT_SEMIBOLD: FontName = { family: 'Inter', style: 'Bold' }
+let FONT_ITALIC: FontName = { family: 'Inter', style: 'Italic' }
 const LIGHT: Paint = { type: 'SOLID', color: hexToRGB('#fcfcfc') }
 const DARK: Paint = { type: 'SOLID', color: hexToRGB('#313131') }
 const DARK_20: Paint = { type: 'SOLID', color: hexToRGB('#313131'), opacity: 0.2 }
@@ -91,12 +93,89 @@ let lastY: number = 0
 
 const MARGIN_X: number = 0
 const MARGIN_Y: number = 40
-const FONT_SIZE: number = 24
-const L_FONT_SIZE: number = 40
+const FONT_SIZE: number = 12
+const L_FONT_SIZE: number = 36
 const CORNER_RADIUS: number = 16
 const MAX_COLUMN_WIDTH: number = 1440
+let tokenFontsResolved: boolean = false
 
 figma.on("currentpagechange", cancel)
+
+function resolveTokenFonts(): void {
+  if (tokenFontsResolved) return
+  tokenFontsResolved = true
+
+  function weightOf(styleName: string): number {
+    const s = (styleName || '').toLowerCase()
+    if (s.indexOf('thin') >= 0 || s.indexOf('hairline') >= 0) return 100
+    if (s.indexOf('extra light') >= 0 || s.indexOf('extralight') >= 0 || s.indexOf('ultralight') >= 0) return 200
+    if (s.indexOf('light') >= 0) return 300
+    if (s.indexOf('regular') >= 0 || s.indexOf('book') >= 0 || s.indexOf('roman') >= 0 || s.indexOf('normal') >= 0) return 400
+    if (s.indexOf('medium') >= 0) return 500
+    if (s.indexOf('semi bold') >= 0 || s.indexOf('semibold') >= 0 || s.indexOf('demi') >= 0) return 600
+    if (s.indexOf('bold') >= 0) return 700
+    if (s.indexOf('extra bold') >= 0 || s.indexOf('extrabold') >= 0) return 800
+    if (s.indexOf('black') >= 0 || s.indexOf('heavy') >= 0) return 900
+    return 400
+  }
+
+  const candidates: FontName[] = []
+  const seen: { [k: string]: boolean } = {}
+
+  function addFont(fn: any): void {
+    if (!fn || typeof fn !== 'object' || !fn.family || !fn.style) return
+    const key = fn.family + '|' + fn.style
+    if (seen[key]) return
+    seen[key] = true
+    candidates.push({ family: fn.family, style: fn.style })
+  }
+
+  try {
+    const localTextStyles = figma.getLocalTextStyles()
+    for (let i = 0; i < localTextStyles.length; i++) addFont((localTextStyles[i] as any).fontName)
+  } catch (e) {}
+
+  if (!candidates.length) return
+
+  function closest(target: number): FontName | null {
+    let best: FontName | null = null
+    let bestDiff = Number.POSITIVE_INFINITY
+    for (let i = 0; i < candidates.length; i++) {
+      const c = candidates[i]
+      const diff = Math.abs(weightOf(c.style) - target)
+      if (diff < bestDiff) {
+        bestDiff = diff
+        best = c
+      }
+    }
+    return best
+  }
+
+  const regular = closest(400)
+  const semi = closest(600) || closest(700)
+  const italic = candidates.find(c => (c.style || '').toLowerCase().indexOf('italic') >= 0)
+  if (regular) FONT_REGULAR = regular
+  if (semi) FONT_SEMIBOLD = semi
+  if (italic) FONT_ITALIC = italic
+}
+
+async function ensureTokenFontsLoaded(): Promise<void> {
+  resolveTokenFonts()
+
+  async function safeLoad(target: FontName, fallback: FontName): Promise<FontName> {
+    try {
+      await figma.loadFontAsync(target)
+      return target
+    } catch (e) {
+      await figma.loadFontAsync(fallback)
+      return fallback
+    }
+  }
+
+  FONT_REGULAR = await safeLoad(FONT_REGULAR, { family: 'Inter', style: 'Regular' })
+  FONT_SEMIBOLD = await safeLoad(FONT_SEMIBOLD, FONT_REGULAR)
+  FONT_ITALIC = await safeLoad(FONT_ITALIC, FONT_REGULAR)
+}
 
 // Relaunch command: wrap selection in auto layout (headless, routed from main.ts)
 export function handleCreateAutoLayout() {
@@ -147,6 +226,7 @@ let activeColorStyleIds: string[] = []
 let activeEffectStyleIds: string[] = []
 let activeLayoutStyleIds: string[] = []
 let activeTextStyleIds: string[] = []
+let activeCollectionGroupsById: { [collectionId: string]: string[] } = {}
 
 let mainFrame: FrameNode
 
@@ -156,6 +236,139 @@ let mainFrame: FrameNode
 // (unlike the native Figma relaunch-button flow, which does).
 var TOKENS_DOC_KEY = 'dsTokensDoc'
 var TOKENS_CONFIG_KEY = 'dsTokensConfig'
+var TOKENS_DOC_STACK_KEY = 'dsTokensDocStack'
+var TOKENS_SYNC_META_KEY = 'dsTokensSyncMeta'
+
+type TokensSyncMeta = {
+  version: number
+  docHash: string
+  variableHash: string
+  updatedAt: string
+  direction: 'doc-to-variables' | 'variables-to-doc' | 'merge-doc-preferred' | 'no-op'
+}
+
+type TokensSyncMode = 'auto' | 'doc-to-variables' | 'variables-to-doc'
+
+function normalizeTokensSyncMode(input: any): TokensSyncMode {
+  if (input === 'doc-to-variables' || input === 'variables-to-doc') return input
+  return 'auto'
+}
+
+function normalizeDescriptionText(value: string | null | undefined): string {
+  const text = String(value || '').trim()
+  return text.toLowerCase() === 'no description' ? '' : text
+}
+
+function hashDescriptionMap(map: { [id: string]: string }): string {
+  const ids = Object.keys(map).sort()
+  let payload = ''
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i]
+    payload += id + '=' + normalizeDescriptionText(map[id]) + '\n'
+  }
+  return String(payload.length) + ':' + payload
+}
+
+function extractVariableDescriptionsFromDocFrame(docFrame: FrameNode): { [id: string]: string } {
+  const out: { [id: string]: string } = {}
+  try {
+    const rows: SceneNode[] = []
+    function walk(node: SceneNode): void {
+      rows.push(node)
+      const kids = (node as any).children as SceneNode[] | undefined
+      if (!kids || !kids.length) return
+      for (let i = 0; i < kids.length; i++) walk(kids[i])
+    }
+    walk(docFrame)
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i] as any
+      if (!row || row.type !== 'FRAME') continue
+      const rowName = String(row.name || '')
+      if (rowName.indexOf('variable-row-') !== 0) continue
+      const variableId = rowName.substring('variable-row-'.length)
+      if (!variableId) continue
+
+      let nextDescription: string | null = null
+      const rowChildren = (row.children || []) as SceneNode[]
+      for (let c = 0; c < rowChildren.length; c++) {
+        const cell = rowChildren[c] as any
+        if (!cell || cell.type !== 'FRAME') continue
+        const cellName = String(cell.name || '')
+
+        if (cellName === 'name-cell') {
+          const textChildren = (cell.children || []).filter((n: any) => n && n.type === 'TEXT') as SceneNode[]
+          if (textChildren.length > 1) nextDescription = String((textChildren[1] as any).characters || '').trim()
+          else if (textChildren.length === 1) nextDescription = String((textChildren[0] as any).characters || '').trim()
+          break
+        }
+
+        if (cellName === 'desc-cell') {
+          const textChildren = (cell.children || []) as SceneNode[]
+          for (let t = 0; t < textChildren.length; t++) {
+            const txt = textChildren[t] as any
+            if (txt && txt.type === 'TEXT') {
+              nextDescription = String(txt.characters || '').trim()
+              break
+            }
+          }
+          break
+        }
+      }
+
+      if (nextDescription === null) continue
+      out[variableId] = normalizeDescriptionText(nextDescription)
+    }
+  } catch (e) {
+    // best effort
+  }
+  return out
+}
+
+function getVariableDescriptionsByIds(ids: string[]): { [id: string]: string } {
+  const out: { [id: string]: string } = {}
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i]
+    try {
+      const v = figma.variables.getVariableById(id)
+      if (!v) continue
+      out[id] = normalizeDescriptionText(v.description || '')
+    } catch (e) {
+      // ignore missing/deleted ids
+    }
+  }
+  return out
+}
+
+function readTokensSyncMeta(frame: FrameNode): TokensSyncMeta | null {
+  try {
+    const raw = frame.getPluginData(TOKENS_SYNC_META_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return null
+    return parsed as TokensSyncMeta
+  } catch (e) {
+    return null
+  }
+}
+
+function writeTokensSyncMeta(frame: FrameNode, direction: TokensSyncMeta['direction']): void {
+  try {
+    const docMap = extractVariableDescriptionsFromDocFrame(frame)
+    const ids = Object.keys(docMap)
+    const variableMap = getVariableDescriptionsByIds(ids)
+    const meta: TokensSyncMeta = {
+      version: 1,
+      docHash: hashDescriptionMap(docMap),
+      variableHash: hashDescriptionMap(variableMap),
+      updatedAt: new Date().toISOString(),
+      direction,
+    }
+    frame.setPluginData(TOKENS_SYNC_META_KEY, JSON.stringify(meta))
+  } catch (e) {
+    // non-fatal
+  }
+}
 
 function findTokensDocFrame(): FrameNode | null {
   try {
@@ -172,8 +385,113 @@ function findTokensDocFrame(): FrameNode | null {
   return null
 }
 
+function findTokensDocStack(): FrameNode | null {
+  try {
+    var children = figma.currentPage.children || []
+    for (var i = 0; i < children.length; i++) {
+      var child = children[i] as any
+      if (child.type === 'FRAME' && child.getPluginData(TOKENS_DOC_STACK_KEY) === '1') {
+        return child as FrameNode
+      }
+    }
+  } catch (e) {
+    // ignore — treated as "no stack yet"
+  }
+  return null
+}
+
+function getSelectedTokensDocFrame(): FrameNode | null {
+  try {
+    var sel = figma.currentPage.selection || []
+    for (var i = 0; i < sel.length; i++) {
+      var cursor: BaseNode | null = sel[i]
+      while (cursor && cursor.type !== 'PAGE') {
+        if (cursor.type === 'FRAME' && (cursor as FrameNode).getPluginData(TOKENS_DOC_KEY) === '1') {
+          return cursor as FrameNode
+        }
+        cursor = cursor.parent
+      }
+    }
+  } catch (e) {
+    // ignore
+  }
+  return null
+}
+
+function ensureTokensDocStack(): FrameNode {
+  var stack = findTokensDocStack()
+  if (!stack) {
+    stack = figma.createFrame()
+    stack.name = 'Specs-Token Docs'
+    stack.layoutMode = 'HORIZONTAL'
+    stack.itemSpacing = 100
+    stack.paddingLeft = 0
+    stack.paddingRight = 0
+    stack.paddingTop = 0
+    stack.paddingBottom = 0
+    stack.layoutSizingHorizontal = 'HUG'
+    stack.layoutSizingVertical = 'HUG'
+    stack.fills = []
+    stack.setPluginData(TOKENS_DOC_STACK_KEY, '1')
+
+    var rightmostX = 0
+    var yTop = 0
+    var pageChildren = figma.currentPage.children || []
+    for (var i = 0; i < pageChildren.length; i++) {
+      var n = pageChildren[i] as SceneNode
+      var nr = n.x + n.width
+      if (nr > rightmostX) rightmostX = nr
+      if (i === 0 || n.y < yTop) yTop = n.y
+    }
+    stack.x = rightmostX + 100
+    stack.y = yTop
+    figma.currentPage.appendChild(stack)
+  }
+
+  try {
+    var docs = (figma.currentPage.children || []).filter(n => n.type === 'FRAME' && (n as FrameNode).getPluginData(TOKENS_DOC_KEY) === '1') as FrameNode[]
+    for (var i = 0; i < docs.length; i++) {
+      var doc = docs[i]
+      if (doc.parent === figma.currentPage) {
+        stack.appendChild(doc)
+      }
+    }
+  } catch (e) {
+    // ignore migration errors
+  }
+
+  return stack
+}
+
+function syncVariableDescriptionsFromDocFrame(docFrame: FrameNode): number {
+  let updated = 0
+  try {
+    const docMap = extractVariableDescriptionsFromDocFrame(docFrame)
+    const ids = Object.keys(docMap)
+    for (let i = 0; i < ids.length; i++) {
+      const variableId = ids[i]
+      const variable = figma.variables.getVariableById(variableId)
+      if (!variable) continue
+
+      const nextDescription = normalizeDescriptionText(docMap[variableId])
+      const currentDescription = normalizeDescriptionText(variable.description || '')
+      if (currentDescription === nextDescription) continue
+
+      try {
+        variable.description = nextDescription
+        updated++
+      } catch (e) {
+        // Ignore individual assignment failures and continue syncing others.
+      }
+    }
+  } catch (e) {
+    // Non-fatal: resync can still continue even if description sync fails.
+  }
+  return updated
+}
+
 export function getTokensResyncState(): { available: boolean } {
-  return { available: !!findTokensDocFrame() }
+  return { available: !!getSelectedTokensDocFrame() }
 }
 
 // Anchors the whole Tokens doc to whatever mode the current selection is
@@ -204,48 +522,76 @@ function propagateSelectedVariableModes(target: FrameNode): void {
 let variablesFrame: FrameNode
 let stylesFrame: FrameNode
 
-function createMainFrame() {
+function getVariableGroupPath(variableName: string): string {
+  if (!variableName) return ''
+  const parts = variableName
+    .split('/')
+    .map(p => p.trim())
+    .filter(Boolean)
+  if (parts.length <= 1) return ''
+  return parts.slice(0, parts.length - 1).join('/')
+}
+
+function buildCollectionGroupSummaries(variables: Variable[]): Array<{ id: string; name: string; count: number; depth: number; parentId: string }> {
+  const countsByPath: { [path: string]: number } = {}
+  for (const v of variables) {
+    const path = getVariableGroupPath(v.name)
+    if (!path) continue
+    const parts = path.split('/').filter(Boolean)
+    for (let depth = 1; depth <= parts.length; depth++) {
+      const prefix = parts.slice(0, depth).join('/')
+      countsByPath[prefix] = (countsByPath[prefix] || 0) + 1
+    }
+  }
+
+  const paths = Object.keys(countsByPath)
+  paths.sort((a, b) => {
+    const ad = a.split('/').length
+    const bd = b.split('/').length
+    if (ad !== bd) return ad - bd
+    return naturalSort(a, b)
+  })
+
+  return paths.map(path => {
+    const parts = path.split('/').filter(Boolean)
+    return {
+      id: path,
+      name: parts[parts.length - 1] || path,
+      count: countsByPath[path],
+      depth: parts.length,
+      parentId: parts.length > 1 ? parts.slice(0, parts.length - 1).join('/') : ''
+    }
+  })
+}
+
+function createMainFrame(attachToStack: boolean = true) {
   // Create a wrapper frame for all content (HORIZONTAL layout)
-  mainFrame = createAutolayout('Variables and Styles', 'HORIZONTAL', 100, 0, 0)
+  mainFrame = createAutolayout('Specs-Variables and Styles', 'HORIZONTAL', 100, 0, 0)
   mainFrame.fills = []
   mainFrame.layoutSizingHorizontal = 'HUG'
   mainFrame.layoutSizingVertical = 'HUG'
 
-  // Create Local Variables section (flows horizontally with HUG sizing)
-  variablesFrame = createAutolayout('Local Variables', 'HORIZONTAL', 100, 0, 0)
+  // Create Local Variables section (stack grouped tables vertically)
+  variablesFrame = createAutolayout('Specs-Local Variables', 'VERTICAL', 24, 24, 24)
   variablesFrame.fills = []
   variablesFrame.layoutSizingHorizontal = 'HUG'
   variablesFrame.layoutSizingVertical = 'HUG'
   mainFrame.appendChild(variablesFrame)
 
-  // Create Local Styles section (flows horizontally with HUG sizing)
-  stylesFrame = createAutolayout('Local Styles', 'HORIZONTAL', 100, 0, 0)
+  // Create Local Styles section (stack grouped tables vertically)
+  stylesFrame = createAutolayout('Specs-Local Styles', 'VERTICAL', 24, 24, 24)
   stylesFrame.fills = []
   stylesFrame.layoutSizingHorizontal = 'HUG'
   stylesFrame.layoutSizingVertical = 'HUG'
   mainFrame.appendChild(stylesFrame)
 
-  // Position 100px to the right of the rightmost artboard
-  let rightmostX = 0
-  for (const node of figma.currentPage.children) {
-    if (node.type === 'FRAME' || node.type === 'COMPONENT' || node.type === 'SECTION') {
-      const nodeRight = node.x + node.width
-      if (nodeRight > rightmostX) {
-        rightmostX = nodeRight
-      }
-    }
-  }
-  mainFrame.x = rightmostX + 100
-  mainFrame.y = 0
-
   mainFrame.cornerRadius = CORNER_RADIUS
   mainFrame.setRelaunchData({ rewrite: REWRITE_MSG })
-  // Insert the frame at the bottom of the layer stack so it doesn't cover existing content
-  try {
-    figma.currentPage.insertChild(0, mainFrame)
-  } catch (e) {
-    // Fallback to append if insertChild fails for any reason
-    figma.currentPage.appendChild(mainFrame)
+
+  if (attachToStack) {
+    // Keep every generated token doc in a single 100px-spaced stack.
+    const stack = ensureTokensDocStack()
+    stack.appendChild(mainFrame)
   }
 }
 
@@ -258,7 +604,22 @@ export function getTokensInitData(): any {
   activeCollections = collections
 
   const sel = selection.map(s => ({ id: s.id, name: s.name, type: s.type }))
-  const cols = collections.map(c => ({ id: c.id, name: c.name, modeCount: c.modes.length }))
+  // Keep collection order exactly as returned by Figma so the picker mirrors
+  // the Variables panel ordering.
+  const cols = collections.map(c => {
+    const vars = c.variableIds
+      .map(id => figma.variables.getVariableById(id))
+      .filter(Boolean) as Variable[]
+    const groups = buildCollectionGroupSummaries(vars)
+
+    return {
+      id: c.id,
+      name: c.name,
+      modeCount: c.modes.length,
+      variableCount: vars.length,
+      groups: groups
+    }
+  })
   const paintStyles = figma.getLocalPaintStyles().map(s => ({ id: s.id, name: s.name }))
   const effectStyles = figma.getLocalEffectStyles().map(s => ({ id: s.id, name: s.name }))
   const textStyles = figma.getLocalTextStyles().map(s => {
@@ -320,10 +681,22 @@ export function getTokensInitData(): any {
   })
   const layoutStyles = figma.getLocalGridStyles().map(s => ({ id: s.id, name: s.name }))
 
+  let selectedConfig: any = null
+  try {
+    const selectedDoc = getSelectedTokensDocFrame()
+    if (selectedDoc) {
+      const raw = selectedDoc.getPluginData(TOKENS_CONFIG_KEY) || 'null'
+      selectedConfig = JSON.parse(raw)
+    }
+  } catch (e) {
+    selectedConfig = null
+  }
+
   return {
     type: 'tokens-init', selection: sel, collections: cols, colorStyles: paintStyles,
     effectStyles: effectStyles, textStyles: textStyles, layoutStyles: layoutStyles,
-    resyncAvailable: !!findTokensDocFrame()
+    resyncAvailable: !!getSelectedTokensDocFrame(),
+    selectedConfig: selectedConfig
   }
 }
 
@@ -333,29 +706,33 @@ export function getTokensInitData(): any {
 async function regenerateTokensDoc(
   targetFrame: FrameNode | null,
   selectedCollectionIds: string[],
+  selectedCollectionGroupsById: { [collectionId: string]: string[] },
   colorIds: string[],
   effectIds: string[],
   textIds: string[],
-  layoutIds: string[]
+  layoutIds: string[],
+  syncDirection: TokensSyncMeta['direction'] = 'variables-to-doc',
+  syncMode: TokensSyncMode = 'auto'
 ): Promise<void> {
   working = true
   count = 0
+  skippedVariableRows = []
+  skippedStyleRows = []
   selection = figma.currentPage.selection
   figma.ui.postMessage({ type: 'tokens-status', text: 'Preparing generation...' })
 
   activeCollections = collections.filter(c => selectedCollectionIds.indexOf(c.id) !== -1)
+  activeCollectionGroupsById = selectedCollectionGroupsById || {}
   activeColorStyleIds = colorIds
   activeEffectStyleIds = effectIds
   activeTextStyleIds = textIds
   activeLayoutStyleIds = layoutIds
 
-  if (targetFrame) {
-    mainFrame = targetFrame
-    while (mainFrame.children.length) mainFrame.children[0].remove()
-  } else {
-    createMainFrame()
-  }
-  propagateSelectedVariableModes(mainFrame)
+  // Transactional render: always build in a staged frame first.
+  // Only replace target content (or append a new doc) after successful render.
+  createMainFrame(false)
+  const stagedFrame = mainFrame
+  propagateSelectedVariableModes(stagedFrame)
 
   figma.ui.postMessage({ type: 'tokens-status', text: 'Writing variables...' })
   await writeVariables(progress => figma.ui.postMessage({ type: 'tokens-progress', text: progress }))
@@ -363,11 +740,59 @@ async function regenerateTokensDoc(
   figma.ui.postMessage({ type: 'tokens-status', text: 'Writing styles...' })
   await writeStyles(progress => figma.ui.postMessage({ type: 'tokens-progress', text: progress }))
 
-  mainFrame.setPluginData(TOKENS_DOC_KEY, '1')
-  mainFrame.setPluginData(TOKENS_CONFIG_KEY, JSON.stringify({
+  // Keep output clean: hide empty columns instead of leaving blank wrappers.
+  try {
+    if (stylesFrame && stylesFrame.children.length === 0 && stylesFrame.parent) {
+      stylesFrame.remove()
+    }
+  } catch (e) {}
+  try {
+    if (variablesFrame && variablesFrame.children.length === 0 && variablesFrame.parent) {
+      variablesFrame.remove()
+    }
+  } catch (e) {}
+
+  const configPayload = JSON.stringify({
     collections: selectedCollectionIds, colorStyles: colorIds,
-    effectStyles: effectIds, textStyles: textIds, layoutStyles: layoutIds
-  }))
+    effectStyles: effectIds, textStyles: textIds, layoutStyles: layoutIds,
+    collectionGroups: selectedCollectionGroupsById || {},
+    syncMode: syncMode
+  })
+  prependTokenTimestampInVariablesColumn(stagedFrame)
+  stagedFrame.setPluginData(TOKENS_DOC_KEY, '1')
+  stagedFrame.setPluginData(TOKENS_CONFIG_KEY, configPayload)
+
+  if (targetFrame) {
+    // Swap only after successful render so existing docs are preserved on error.
+    while (targetFrame.children.length) targetFrame.children[0].remove()
+    while (stagedFrame.children.length) targetFrame.appendChild(stagedFrame.children[0])
+    targetFrame.name = stagedFrame.name
+    targetFrame.cornerRadius = stagedFrame.cornerRadius
+    targetFrame.setRelaunchData({ rewrite: REWRITE_MSG })
+    targetFrame.setPluginData(TOKENS_DOC_KEY, stagedFrame.getPluginData(TOKENS_DOC_KEY))
+    targetFrame.setPluginData(TOKENS_CONFIG_KEY, stagedFrame.getPluginData(TOKENS_CONFIG_KEY))
+    writeTokensSyncMeta(targetFrame, syncDirection)
+    mainFrame = targetFrame
+    try { stagedFrame.remove() } catch (e) {}
+  } else {
+    const stack = ensureTokensDocStack()
+    const groupedFrames = [
+      ...buildGroupFramesFromSectionContainer(variablesFrame, configPayload),
+      ...buildGroupFramesFromSectionContainer(stylesFrame, configPayload)
+    ]
+    if (groupedFrames.length > 0) {
+      for (let i = 0; i < groupedFrames.length; i++) {
+        writeTokensSyncMeta(groupedFrames[i], syncDirection)
+        stack.appendChild(groupedFrames[i])
+      }
+      mainFrame = groupedFrames[groupedFrames.length - 1]
+      try { stagedFrame.remove() } catch (e) {}
+    } else {
+      writeTokensSyncMeta(stagedFrame, syncDirection)
+      stack.appendChild(stagedFrame)
+      mainFrame = stagedFrame
+    }
+  }
 
   finish()
 }
@@ -380,19 +805,18 @@ export function handleTokensConfirm(msg: any): void {
       collections = figma.variables.getLocalVariableCollections() || []
       selection = figma.currentPage.selection
 
-      var existingByData = findTokensDocFrame()
-      var existingByRelaunch = (selection[0]?.type === 'FRAME' && selection[0]?.getRelaunchData().rewrite === REWRITE_MSG)
-        ? selection[0] as FrameNode
-        : null
-      var target = existingByData || existingByRelaunch || null
-
       var selectedIds: string[] = Array.isArray(msg.collections) ? msg.collections : collections.map(c => c.id)
+      var syncMode: TokensSyncMode = normalizeTokensSyncMode(msg && msg.syncMode)
+      var selectedCollectionGroupsById: { [collectionId: string]: string[] } =
+        (msg.collectionGroups && typeof msg.collectionGroups === 'object') ? msg.collectionGroups : {}
       await regenerateTokensDoc(
-        target, selectedIds,
+        null, selectedIds, selectedCollectionGroupsById,
         Array.isArray(msg.colorStyles) ? msg.colorStyles : [],
         Array.isArray(msg.effectStyles) ? msg.effectStyles : [],
         Array.isArray(msg.textStyles) ? msg.textStyles : [],
-        Array.isArray(msg.layoutStyles) ? msg.layoutStyles : []
+        Array.isArray(msg.layoutStyles) ? msg.layoutStyles : [],
+        'variables-to-doc',
+        syncMode
       )
     } catch (err) {
       working = false
@@ -406,12 +830,12 @@ export function handleTokensConfirm(msg: any): void {
 // Resync flow: regenerate the existing doc frame using its last-used
 // selection, with no picker round-trip. Picks up newly added/removed
 // variables and styles within the previously chosen collections/groups.
-export function handleTokensResync(): void {
+export function handleTokensResync(msg?: any): void {
   (async () => {
     try {
-      var target = findTokensDocFrame()
+      var target = getSelectedTokensDocFrame()
       if (!target) {
-        figma.ui.postMessage({ type: 'tokens-status', text: 'No token documentation found on this page yet — use Confirm to generate one first.' })
+        figma.ui.postMessage({ type: 'tokens-status', text: 'Select a previous token documentation frame to resync it.' })
         return
       }
 
@@ -426,14 +850,72 @@ export function handleTokensResync(): void {
         return
       }
 
+      const requestedMode: TokensSyncMode = normalizeTokensSyncMode((msg && msg.syncMode) || stored.syncMode)
+
+      const meta = readTokensSyncMeta(target)
+      const lastSyncLabel = meta && meta.updatedAt ? (' Last sync: ' + meta.updatedAt + '.') : ''
+      const docMapBefore = extractVariableDescriptionsFromDocFrame(target)
+      const variableIds = Object.keys(docMapBefore)
+      const variableMapBefore = getVariableDescriptionsByIds(variableIds)
+      const docChanged = !meta || hashDescriptionMap(docMapBefore) !== meta.docHash
+      const variableChanged = !meta || hashDescriptionMap(variableMapBefore) !== meta.variableHash
+
+      let syncDirection: TokensSyncMeta['direction'] = 'no-op'
+      let syncedCount = 0
+      if (requestedMode === 'doc-to-variables') {
+        syncDirection = 'doc-to-variables'
+        syncedCount = syncVariableDescriptionsFromDocFrame(target)
+      } else if (requestedMode === 'variables-to-doc') {
+        syncDirection = 'variables-to-doc'
+      } else {
+        if (docChanged && !variableChanged) {
+          syncDirection = 'doc-to-variables'
+          syncedCount = syncVariableDescriptionsFromDocFrame(target)
+        } else if (!docChanged && variableChanged) {
+          syncDirection = 'variables-to-doc'
+        } else if (docChanged && variableChanged) {
+          syncDirection = 'merge-doc-preferred'
+          syncedCount = syncVariableDescriptionsFromDocFrame(target)
+        }
+      }
+
+      if (requestedMode === 'doc-to-variables') {
+        figma.ui.postMessage({
+          type: 'tokens-status',
+          text: 'Forced sync mode: doc -> variables (' + syncedCount + ' description' + (syncedCount === 1 ? '' : 's') + ' updated).' + lastSyncLabel
+        })
+      } else if (requestedMode === 'variables-to-doc') {
+        figma.ui.postMessage({
+          type: 'tokens-status',
+          text: 'Forced sync mode: variables -> doc (regenerating from Variables panel).' + lastSyncLabel
+        })
+      } else if (syncDirection === 'doc-to-variables') {
+        figma.ui.postMessage({
+          type: 'tokens-status',
+          text: 'Sync direction: doc -> variables (' + syncedCount + ' description' + (syncedCount === 1 ? '' : 's') + ' updated).' + lastSyncLabel
+        })
+      } else if (syncDirection === 'variables-to-doc') {
+        figma.ui.postMessage({ type: 'tokens-status', text: 'Sync direction: variables -> doc (source variables changed since last sync).' + lastSyncLabel })
+      } else if (syncDirection === 'merge-doc-preferred') {
+        figma.ui.postMessage({
+          type: 'tokens-status',
+          text: 'Both sides changed since last sync; applying doc descriptions first (' + syncedCount + ' update' + (syncedCount === 1 ? '' : 's') + '), then regenerating.' + lastSyncLabel
+        })
+      } else {
+        figma.ui.postMessage({ type: 'tokens-status', text: 'No detected description changes since last sync; regenerating doc.' + lastSyncLabel })
+      }
+
       collections = figma.variables.getLocalVariableCollections() || []
       await regenerateTokensDoc(
         target,
         stored.collections || [],
+        stored.collectionGroups || {},
         stored.colorStyles || [],
         stored.effectStyles || [],
         stored.textStyles || [],
-        stored.layoutStyles || []
+        stored.layoutStyles || [],
+        syncDirection,
+        requestedMode
       )
     } catch (err) {
       working = false
@@ -444,398 +926,1020 @@ export function handleTokensResync(): void {
   })()
 }
 
+const TOKEN_TARGET_WIDTH = 1280
+const TOKEN_FRAME_PADDING_X = 24
+const PREVIEW_COLUMN_WIDTH = 320
+const NAME_COLUMN_WIDTH = 355
+const VALUE_COLUMN_WIDTH = TOKEN_TARGET_WIDTH - (TOKEN_FRAME_PADDING_X * 2) - PREVIEW_COLUMN_WIDTH - NAME_COLUMN_WIDTH
+const TOKEN_TABLE_WIDTH = PREVIEW_COLUMN_WIDTH + NAME_COLUMN_WIDTH + VALUE_COLUMN_WIDTH
+const TOKEN_ROW_HEIGHT = 88
+const TOKEN_HEADER_HEIGHT = 48
+const TOKEN_NAME_FONT_SIZE = 20
+const TOKENS_TIMESTAMP_FRAME_NAME = 'tokens-timestamp'
+
+function setFillWidth(node: SceneNode): void {
+  try { (node as any).layoutSizingHorizontal = 'FILL' } catch (e) {}
+}
+
+function createTokenTableSection(title: string): FrameNode {
+  const section = createAutolayout(title, 'VERTICAL', 0, 0, 0, 'HUG', 'HUG')
+  section.fills = [LIGHT]
+  return section
+}
+
+function createTokenGroupTitle(title: string): FrameNode {
+  const wrap = createAutolayout('group-title-' + title, 'VERTICAL', 0, 0, 0, 'HUG', 'HUG')
+  const txt = makeText(title, FONT_SEMIBOLD, 56)
+  txt.fills = [DARK]
+  addToColumn(wrap, txt)
+  return wrap
+}
+
+function createTokenSubgroupTitle(title: string): FrameNode {
+  const wrap = createAutolayout('subgroup-title-' + title, 'VERTICAL', 0, 0, 0, 'HUG', 'HUG')
+  const txt = makeText(title, FONT_SEMIBOLD, 28)
+  txt.fills = [DARK]
+  addToColumn(wrap, txt)
+  return wrap
+}
+
+function getTokenTimestampText(): string {
+  const d = new Date()
+  let timezone = ''
+  try {
+    const dtf = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' })
+    const parts = dtf.formatToParts(d)
+    for (let i = 0; i < parts.length; i++) {
+      if (parts[i].type === 'timeZoneName') {
+        timezone = parts[i].value
+        break
+      }
+    }
+  } catch (e) {}
+
+  const dateStr = d.toLocaleDateString()
+  const timeStr = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  return timezone
+    ? 'Last updated: ' + dateStr + ' at ' + timeStr + ' (' + timezone + ')'
+    : 'Last updated: ' + dateStr + ' at ' + timeStr
+}
+
+function createTokenTimestampFrame(): FrameNode {
+  const section = createAutolayout(TOKENS_TIMESTAMP_FRAME_NAME, 'VERTICAL', 2, 0, 0, 'HUG', 'HUG')
+  const stamp = makeText(getTokenTimestampText(), FONT_REGULAR, 11)
+  stamp.fills = [COLOR_TEXT_SECONDARY]
+  addToColumn(section, stamp)
+  try {
+    const currentUserName = figma.currentUser && figma.currentUser.name ? figma.currentUser.name.trim() : ''
+    if (currentUserName) {
+      const by = makeText('By: ' + currentUserName, FONT_REGULAR, 11)
+      by.fills = [COLOR_TEXT_SECONDARY]
+      addToColumn(section, by)
+    }
+  } catch (e) {}
+  return section
+}
+
+function prependTokenTimestamp(target: FrameNode): void {
+  try {
+    const children = target.children || []
+    for (let i = children.length - 1; i >= 0; i--) {
+      if ((children[i] as any).name === TOKENS_TIMESTAMP_FRAME_NAME) children[i].remove()
+    }
+  } catch (e) {}
+  try {
+    target.insertChild(0, createTokenTimestampFrame())
+  } catch (e) {
+    target.appendChild(createTokenTimestampFrame())
+  }
+}
+
+function prependTokenTimestampInVariablesColumn(root: FrameNode): void {
+  let inserted = false
+  try {
+    const kids = root.children || []
+    for (let i = 0; i < kids.length; i++) {
+      const child = kids[i] as any
+      if (!child || child.type !== 'FRAME') continue
+      const childName = String(child.name || '')
+      if (childName === 'Specs-Local Variables' || childName === 'Specs-Local Styles') {
+        prependTokenTimestamp(child as FrameNode)
+        inserted = true
+      }
+    }
+  } catch (e) {}
+  if (!inserted) prependTokenTimestamp(root)
+}
+
+function getTokenGroupPath(name: string): string {
+  if (!name) return 'Ungrouped'
+  const parts = name.split('/').map(p => p.trim()).filter(Boolean)
+  if (parts.length <= 1) return 'Ungrouped'
+  return parts.slice(0, parts.length - 1).join('/')
+}
+
+function groupByTokenPath<T>(items: T[], getName: (item: T) => string): Array<{ path: string; items: T[] }> {
+  const byPath: { [path: string]: T[] } = {}
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
+    const path = getTokenGroupPath(getName(item))
+    if (!byPath[path]) byPath[path] = []
+    byPath[path].push(item)
+  }
+  const paths = Object.keys(byPath).sort((a, b) => {
+    if (a === 'Ungrouped') return 1
+    if (b === 'Ungrouped') return -1
+    return naturalSort(a, b)
+  })
+  return paths.map(path => ({ path, items: byPath[path] }))
+}
+
+function normalizeGroupPathForCollection(path: string, collectionName: string): string {
+  if (!path || path === 'Ungrouped') return 'Ungrouped'
+  const cRaw = (collectionName || '').trim()
+  const pRaw = path.trim()
+  if (!cRaw) return pRaw
+
+  function splitParts(input: string): string[] {
+    return input
+      .split(/[/\.]/)
+      .map(s => s.trim().toLowerCase())
+      .filter(Boolean)
+  }
+
+  const cParts = splitParts(cRaw)
+  const pParts = splitParts(pRaw)
+  if (!pParts.length) return 'Ungrouped'
+
+  let start = 0
+  while (start < cParts.length && start < pParts.length && cParts[start] === pParts[start]) {
+    start++
+  }
+
+  if (start >= pParts.length) return 'Ungrouped'
+  const remainder = pParts.slice(start)
+  return remainder.length ? remainder.join('/') : 'Ungrouped'
+}
+
+function getLeafGroupLabel(path: string): string {
+  if (!path || path === 'Ungrouped') return 'Ungrouped'
+  const slashParts = path.split('/').map(p => p.trim()).filter(Boolean)
+  if (slashParts.length > 0) return slashParts[slashParts.length - 1]
+  return path
+}
+
+function getParentAndLeafGroupLabel(path: string): string {
+  if (!path || path === 'Ungrouped') return 'Ungrouped'
+  const parts = path.split('/').map(p => p.trim()).filter(Boolean)
+  if (parts.length <= 1) return parts[0] || 'Ungrouped'
+  return parts[parts.length - 2] + ' / ' + parts[parts.length - 1]
+}
+
+function getLeafTokenName(name: string): string {
+  if (!name) return ''
+  const slashParts = name.split('/').map(p => p.trim()).filter(Boolean)
+  let leaf = slashParts.length ? slashParts[slashParts.length - 1] : name
+  const dotParts = leaf.split('.').map(p => p.trim()).filter(Boolean)
+  if (dotParts.length > 1) leaf = dotParts[dotParts.length - 1]
+  return leaf
+}
+
+function buildGroupFramesFromSectionContainer(container: FrameNode, configPayload: string): FrameNode[] {
+  const result: FrameNode[] = []
+  let currentMajorTitle = ''
+  let currentSubgroupTitle = ''
+  const children = container.children.slice()
+
+  for (let i = 0; i < children.length; i++) {
+    const child = children[i] as SceneNode
+    const childName = ((child as any).name || '') as string
+
+    if (childName.indexOf('group-title-') === 0) {
+      currentMajorTitle = childName.substring('group-title-'.length) || 'Tokens'
+      currentSubgroupTitle = ''
+      continue
+    }
+    if (childName.indexOf('subgroup-title-') === 0) {
+      currentSubgroupTitle = childName.substring('subgroup-title-'.length) || 'Ungrouped'
+      continue
+    }
+
+    if ((child as any).type === 'FRAME') {
+      const out = createAutolayout('Specs-' + currentMajorTitle + '-' + currentSubgroupTitle, 'VERTICAL', 12, 24, 24)
+      out.fills = []
+      out.layoutSizingHorizontal = 'HUG'
+      out.layoutSizingVertical = 'HUG'
+      out.cornerRadius = CORNER_RADIUS
+
+      prependTokenTimestamp(out)
+      out.appendChild(createTokenGroupTitle(currentMajorTitle || 'Tokens'))
+      out.appendChild(createTokenSubgroupTitle(currentSubgroupTitle || 'Ungrouped'))
+      out.appendChild(child as FrameNode)
+
+      out.setRelaunchData({ rewrite: REWRITE_MSG })
+      out.setPluginData(TOKENS_DOC_KEY, '1')
+      out.setPluginData(TOKENS_CONFIG_KEY, configPayload)
+      result.push(out)
+      currentSubgroupTitle = ''
+    }
+  }
+
+  return result
+}
+
+function setFixedCellWidth(cell: FrameNode, width: number): void {
+  cell.layoutSizingHorizontal = 'FIXED'
+  cell.resizeWithoutConstraints(width, cell.height)
+}
+
+function createTokenHeaderRow(title: string): FrameNode {
+  const row = createAutolayout(title + '-header', 'HORIZONTAL', 0, 0, 0, 'HUG', 'FIXED')
+  row.resizeWithoutConstraints(TOKEN_TABLE_WIDTH, TOKEN_HEADER_HEIGHT)
+  row.counterAxisAlignItems = 'CENTER'
+  row.strokes = [{ type: 'SOLID', color: hexToRGB('#cccccc') }]
+  row.strokeWeight = 1
+  row.strokeBottomWeight = 1
+  row.strokeTopWeight = 0
+  row.strokeLeftWeight = 0
+  row.strokeRightWeight = 0
+
+  function makeHeaderCell(label: string, width: number): FrameNode {
+    const cell = createAutolayout('header-' + label, 'VERTICAL', 0, ROW_PADDING, 0, 'FIXED', 'FILL')
+    row.appendChild(cell)
+    setFixedCellWidth(cell, width)
+    const txt = makeText(label, FONT_SEMIBOLD, FONT_SIZE)
+    addToColumn(cell, txt)
+    return cell
+  }
+
+  makeHeaderCell('Preview', PREVIEW_COLUMN_WIDTH)
+  makeHeaderCell('Name', NAME_COLUMN_WIDTH)
+  makeHeaderCell('Value', VALUE_COLUMN_WIDTH)
+
+  return row
+}
+
+function createTokenPreviewCell(content?: SceneNode | null): FrameNode {
+  const cell = createAutolayout('preview-cell', 'VERTICAL', 0, 0, 0, 'FIXED', 'FILL')
+  setFixedCellWidth(cell, PREVIEW_COLUMN_WIDTH)
+  cell.counterAxisAlignItems = 'CENTER'
+  cell.primaryAxisAlignItems = 'CENTER'
+
+  if (content) {
+    try {
+      cell.appendChild(content)
+      if ((content as any).layoutAlign !== undefined) {
+        (content as any).layoutAlign = 'STRETCH'
+      }
+      if ((content as any).resizeWithoutConstraints && (content as any).type !== 'TEXT') {
+        const contentName = String((content as any).name || '')
+        if (contentName === 'text-style-preview-wrap') {
+          ;(content as any).resizeWithoutConstraints(PREVIEW_COLUMN_WIDTH, (content as any).height)
+        } else {
+          ;(content as any).resizeWithoutConstraints(PREVIEW_COLUMN_WIDTH, TOKEN_ROW_HEIGHT)
+        }
+      }
+    } catch (e) {}
+  }
+  return cell
+}
+
+function createTokenTextCell(name: string, value: string, desc: string): { nameCell: FrameNode; valueCell: FrameNode } {
+  function textCell(cellName: string, text: string, width: number, muted?: boolean, size?: number, weight?: FontName): FrameNode {
+    const contentWidth = Math.max(80, width - (ROW_PADDING * 2))
+    const cell = createAutolayout(cellName, 'VERTICAL', 4, ROW_PADDING, 0, 'FIXED', 'FILL')
+    setFixedCellWidth(cell, width)
+    cell.primaryAxisAlignItems = 'CENTER'
+    const txt = makeText(text || '—', weight || FONT_REGULAR, size || FONT_SIZE)
+    try { txt.resizeWithoutConstraints(contentWidth, txt.height) } catch (e) {}
+    if (muted) txt.fills = [COLOR_TEXT_SECONDARY]
+    addToColumn(cell, txt)
+    return cell
+  }
+  const nameContentWidth = Math.max(80, NAME_COLUMN_WIDTH - (ROW_PADDING * 2))
+  const n = createAutolayout('name-cell', 'VERTICAL', 6, ROW_PADDING, 0, 'FIXED', 'FILL')
+  setFixedCellWidth(n, NAME_COLUMN_WIDTH)
+  n.primaryAxisAlignItems = 'CENTER'
+  const nameTitle = makeText(name || '—', FONT_SEMIBOLD, TOKEN_NAME_FONT_SIZE)
+  try { nameTitle.resizeWithoutConstraints(nameContentWidth, nameTitle.height) } catch (e) {}
+  const nameDesc = makeText(desc || 'no description', FONT_REGULAR, FONT_SIZE)
+  try { nameDesc.resizeWithoutConstraints(nameContentWidth, nameDesc.height) } catch (e) {}
+  nameDesc.fills = [COLOR_TEXT_SECONDARY]
+  addToColumn(n, nameTitle)
+  addToColumn(n, nameDesc)
+
+  const valueText = (value || '—').trim()
+  const valuePaddingY = valueText.indexOf('\n') >= 0 ? 16 : 0
+  const v = createAutolayout('value-cell', 'VERTICAL', 4, ROW_PADDING, valuePaddingY, 'FIXED', 'FILL')
+  setFixedCellWidth(v, VALUE_COLUMN_WIDTH)
+  v.primaryAxisAlignItems = 'CENTER'
+  const valueContentWidth = Math.max(80, VALUE_COLUMN_WIDTH - (ROW_PADDING * 2))
+
+  function renderValueLineWithBadge(line: string): SceneNode {
+    const varMatch = line.match(/^(.*?)(var\(--[^)]+\))(\s*\(.*\))?$/)
+    if (!varMatch || !varMatch[2]) {
+      const plain = makeText(line, FONT_REGULAR, FONT_SIZE)
+      plain.fills = [DARK]
+      try { plain.resizeWithoutConstraints(valueContentWidth, plain.height) } catch (e) {}
+      return plain
+    }
+
+    const label = (varMatch[1] || '').trim()
+    const tokenRef = (varMatch[2] || '').trim()
+    const fallback = (varMatch[3] || '').trim()
+
+    const lineWrap = createAutolayout('value-line-token', 'HORIZONTAL', 2, 0, 0, 'FIXED', 'HUG')
+    lineWrap.resizeWithoutConstraints(valueContentWidth, 1)
+    lineWrap.counterAxisAlignItems = 'CENTER'
+
+    if (label) {
+      const labelText = makeText(label + ':', FONT_REGULAR, FONT_SIZE)
+      labelText.fills = [DARK]
+      lineWrap.appendChild(labelText)
+    }
+
+    const badge = createAutolayout('token-var-badge', 'HORIZONTAL', 0, 6, 3, 'HUG', 'HUG')
+    badge.cornerRadius = 3
+    badge.strokes = [COLOR_BORDER]
+    badge.strokeWeight = 1
+    badge.fills = [COLOR_WHITE]
+    const badgeText = makeText(tokenRef, FONT_REGULAR, FONT_SIZE)
+    badgeText.fills = [DARK]
+    badge.appendChild(badgeText)
+    lineWrap.appendChild(badge)
+
+    if (fallback) {
+      const fallbackText = makeText(fallback, FONT_REGULAR, FONT_SIZE)
+      fallbackText.fills = [COLOR_TEXT_SECONDARY]
+      lineWrap.appendChild(fallbackText)
+    }
+
+    return lineWrap
+  }
+
+  const lines = valueText.split(/\r?\n/)
+  for (let li = 0; li < lines.length; li++) {
+    const rawLine = lines[li]
+    const line = (rawLine || '').trim()
+    if (!line) continue
+
+    addToColumn(v, renderValueLineWithBadge(line))
+  }
+  if (v.children.length === 0) addToColumn(v, makeText('—', FONT_REGULAR, FONT_SIZE))
+
+  return { nameCell: n, valueCell: v }
+}
+
+function appendTokenRow(section: FrameNode, rowName: string, preview: SceneNode | null, tokenName: string, value: string, description: string, isLast: boolean): void {
+  const row = createAutolayout(rowName, 'HORIZONTAL', 0, 0, 0, 'FIXED', 'HUG')
+  row.resizeWithoutConstraints(TOKEN_TABLE_WIDTH, TOKEN_ROW_HEIGHT)
+  ;(row as any).minHeight = TOKEN_ROW_HEIGHT
+  row.counterAxisAlignItems = 'CENTER'
+  if (!isLast) {
+    row.strokes = [{ type: 'SOLID', color: hexToRGB('#cccccc') }]
+    row.strokeWeight = 1
+    row.strokeBottomWeight = 1
+    row.strokeTopWeight = 0
+    row.strokeLeftWeight = 0
+    row.strokeRightWeight = 0
+  }
+  section.appendChild(row)
+
+  const previewCell = createTokenPreviewCell(preview)
+  const textCells = createTokenTextCell(tokenName, value, description)
+  row.appendChild(previewCell)
+  row.appendChild(textCells.nameCell)
+  row.appendChild(textCells.valueCell)
+  previewCell.layoutAlign = 'STRETCH'
+  textCells.nameCell.layoutAlign = 'STRETCH'
+  textCells.valueCell.layoutAlign = 'STRETCH'
+}
+
+function getCollectionPrimaryMode(c: VariableCollection): { modeId: string; name: string } {
+  if (!c.modes || c.modes.length === 0) return { modeId: '', name: DEFAULT_MODE_NAME }
+  var preferred = c.modes.find(m => m.name === DEFAULT_MODE_NAME)
+  return preferred || c.modes[0]
+}
+
+function formatVariableValue(raw: any): string {
+  if (raw === null || raw === undefined) return '—'
+  if (typeof raw === 'boolean') return raw ? 'true' : 'false'
+  if (typeof raw === 'number') return String(raw)
+  if (typeof raw === 'string') return raw
+  if (typeof raw === 'object' && raw.type === 'VARIABLE_ALIAS' && raw.id) {
+    const aliased = figma.variables.getVariableById(raw.id)
+    return aliased ? sanitizeName(aliased.name) : String(raw.id)
+  }
+  if (typeof raw === 'object' && raw.r !== undefined && raw.g !== undefined && raw.b !== undefined) {
+    try { return figmaRGBToHex(raw as any) } catch (e) { return 'color' }
+  }
+  if (typeof raw === 'object' && raw.paints) return 'paint'
+  if (typeof raw === 'object' && raw.effects) return 'effects'
+  try { return JSON.stringify(raw) } catch (e) { return String(raw) }
+}
+
+function formatResolvedValue(raw: any): string {
+  if (raw === null || raw === undefined) return '—'
+  if (typeof raw === 'boolean') return raw ? 'true' : 'false'
+  if (typeof raw === 'number') return String(raw)
+  if (typeof raw === 'string') return raw
+  if (typeof raw === 'object' && raw.r !== undefined && raw.g !== undefined && raw.b !== undefined) {
+    try { return figmaRGBToHex(raw as any) } catch (e) { return 'color' }
+  }
+  if (typeof raw === 'object' && raw.paints) return 'paint'
+  if (typeof raw === 'object' && raw.effects) return 'effects'
+  try { return JSON.stringify(raw) } catch (e) { return String(raw) }
+}
+
+function makeVariableReference(name: string): string {
+  let ref = (name || '').replace(/\//g, '.').trim().toLowerCase()
+  if (ref && ref.indexOf('--') !== 0) ref = '--' + ref
+  return ref ? 'var(' + ref + ')' : '—'
+}
+
+function formatVariableCellValue(v: Variable, modeId: string): string {
+  const raw = (v.valuesByMode || ({} as any))[modeId]
+  const resolved = resolveAliasValueForMode(raw, modeId)
+  const fallback = formatResolvedValue(resolved)
+
+  if (raw && typeof raw === 'object' && raw.type === 'VARIABLE_ALIAS' && raw.id) {
+    const aliasVar = figma.variables.getVariableById(raw.id)
+    const aliasRef = aliasVar ? makeVariableReference(aliasVar.name) : String(raw.id)
+    return fallback && fallback !== '—' ? (aliasRef + ' (' + fallback + ')') : aliasRef
+  }
+
+  const selfRef = makeVariableReference(v.name)
+  return fallback && fallback !== '—' ? (selfRef + ' (' + fallback + ')') : selfRef
+}
+
+function resolveAliasValueForMode(raw: any, modeId: string): any {
+  function resolveInner(value: any, depth: number, visited: { [id: string]: boolean }): any {
+    if (depth > 12) return value
+    if (!(value && typeof value === 'object' && value.type === 'VARIABLE_ALIAS' && value.id)) return value
+    const aliasId = String(value.id)
+    if (visited[aliasId]) return value
+    visited[aliasId] = true
+
+    try {
+      const aliased = figma.variables.getVariableById(aliasId)
+      if (!aliased) return value
+      let next: any = null
+      if (modeId && aliased.valuesByMode && Object.prototype.hasOwnProperty.call(aliased.valuesByMode, modeId)) {
+        next = (aliased.valuesByMode as any)[modeId]
+      } else {
+        const keys = Object.keys(aliased.valuesByMode || {})
+        if (keys.length) next = (aliased.valuesByMode as any)[keys[0]]
+      }
+      if (next === null || next === undefined) return value
+      return resolveInner(next, depth + 1, visited)
+    } catch (e) {
+      return value
+    }
+  }
+
+  return resolveInner(raw, 0, {})
+}
+
+function resolveNumericValue(raw: any, modeId: string): number {
+  const resolved = resolveAliasValueForMode(raw, modeId)
+  if (typeof resolved === 'number' && isFinite(resolved)) return resolved
+  const parsed = parseFloat(String(resolved ?? ''))
+  return isFinite(parsed) ? parsed : 0
+}
+
+function makeVariablePreview(v: Variable, modeId: string): SceneNode | null {
+  try {
+    const raw = (v.valuesByMode || ({} as any))[modeId]
+    const resolvedRaw = resolveAliasValueForMode(raw, modeId)
+    const previewWidth = PREVIEW_COLUMN_WIDTH
+    const previewHeight = TOKEN_ROW_HEIGHT
+
+    function makeLeftAlignedPreview(content: SceneNode): FrameNode {
+      const wrap = figma.createFrame()
+      wrap.name = 'token-left-align-preview'
+      wrap.layoutMode = 'HORIZONTAL'
+      wrap.primaryAxisSizingMode = 'FIXED'
+      wrap.counterAxisSizingMode = 'FIXED'
+      wrap.resize(previewWidth, previewHeight)
+      wrap.itemSpacing = 0
+      wrap.paddingLeft = 24
+      wrap.paddingRight = 0
+      wrap.paddingTop = 0
+      wrap.paddingBottom = 0
+      wrap.counterAxisAlignItems = 'CENTER'
+      wrap.primaryAxisAlignItems = 'MIN'
+      wrap.fills = []
+      wrap.appendChild(content)
+      return wrap
+    }
+
+    if (v.resolvedType === 'FLOAT' && /(^|\/)(space|spacing|gap)(\/|$)|\b(space|spacing|gap)\b/i.test(v.name)) {
+      const n = resolveNumericValue(raw, modeId)
+      const row = figma.createFrame()
+      row.name = 'space-preview-row'
+      row.layoutMode = 'HORIZONTAL'
+      row.primaryAxisSizingMode = 'AUTO'
+      row.counterAxisSizingMode = 'AUTO'
+      row.itemSpacing = 0
+      row.fills = []
+      row.counterAxisAlignItems = 'CENTER'
+
+      const leftDot = figma.createEllipse()
+      leftDot.resize(8, 8)
+      leftDot.fills = [COLOR_BORDER]
+      row.appendChild(leftDot)
+
+      const spacer = figma.createRectangle()
+      const px = Math.max(1, Math.round(n))
+      spacer.resize(px, 16)
+      spacer.cornerRadius = 0
+      spacer.fills = [DARK]
+      try { (spacer as any).setBoundVariable('width', v) } catch (e) {}
+      row.appendChild(spacer)
+
+      const rightDot = figma.createEllipse()
+      rightDot.resize(8, 8)
+      rightDot.fills = [COLOR_BORDER]
+      row.appendChild(rightDot)
+      return makeLeftAlignedPreview(row)
+    }
+
+    if (v.resolvedType === 'FLOAT' && /(^|\/)(radius|corner|rounded)(\/|$)|\b(radius|corner|rounded)\b/i.test(v.name)) {
+      const n = resolveNumericValue(raw, modeId)
+      const radiusPreview = figma.createRectangle()
+      radiusPreview.resize(40, 40)
+      radiusPreview.fills = [COLOR_BG_LIGHT]
+      try {
+        ;(radiusPreview as any).setBoundVariable('topLeftRadius', v)
+        ;(radiusPreview as any).setBoundVariable('topRightRadius', v)
+        ;(radiusPreview as any).setBoundVariable('bottomLeftRadius', v)
+        ;(radiusPreview as any).setBoundVariable('bottomRightRadius', v)
+      } catch (e) {
+        radiusPreview.cornerRadius = Math.max(0, n)
+      }
+      return makeLeftAlignedPreview(radiusPreview)
+    }
+
+    if (v.resolvedType === 'FLOAT' && /font[\.\s\-_]*size|\bfontSize\b|(^|[\.\/_-])fs([\.\/_-]|$)/i.test(v.name)) {
+      const n = resolveNumericValue(raw, modeId)
+      const text = makeText('Aa', FONT_REGULAR, Math.max(8, n || 16))
+      text.fills = [DARK]
+      try { text.fontSize = Math.max(8, n || 16) } catch (e) {}
+      try { (text as any).setBoundVariable('fontSize', v) } catch (e) {}
+      return makeLeftAlignedPreview(text)
+    }
+
+    if (v.resolvedType === 'FLOAT' && /line[\.\s\-_]*height|\blineHeight\b|(^|[\.\/_-])lh([\.\/_-]|$)/i.test(v.name)) {
+      const n = resolveNumericValue(raw, modeId)
+      const text = makeText('Aa', FONT_REGULAR, 20)
+      text.fills = [DARK]
+      try {
+        ;(text as any).setBoundVariable('lineHeight', v)
+      } catch (e) {
+        try { (text as any).lineHeight = { unit: 'PIXELS', value: Math.max(8, n || 24) } } catch (ee) {}
+      }
+      return makeLeftAlignedPreview(text)
+    }
+
+    if (v.resolvedType === 'COLOR') {
+      const sw = figma.createRectangle()
+      sw.resize(previewWidth, previewHeight)
+      sw.cornerRadius = 0
+      const fills = JSON.parse(JSON.stringify(sw.fills))
+      try {
+        fills[0] = figma.variables.setBoundVariableForPaint(fills[0], 'color', v)
+        sw.fills = fills
+      } catch (e) {
+        if (resolvedRaw && typeof resolvedRaw === 'object' && resolvedRaw.r !== undefined) {
+          sw.fills = [{ type: 'SOLID', color: { r: resolvedRaw.r, g: resolvedRaw.g, b: resolvedRaw.b }, opacity: resolvedRaw.a !== undefined ? resolvedRaw.a : 1 } as Paint]
+        }
+      }
+      if ((!sw.fills || (Array.isArray(sw.fills) && sw.fills.length === 0)) && resolvedRaw && typeof resolvedRaw === 'object' && resolvedRaw.r !== undefined) {
+        sw.fills = [{ type: 'SOLID', color: { r: resolvedRaw.r, g: resolvedRaw.g, b: resolvedRaw.b }, opacity: resolvedRaw.a !== undefined ? resolvedRaw.a : 1 } as Paint]
+      }
+      return sw
+    }
+    if (v.resolvedType === 'BOOLEAN') {
+      const chip = figma.createFrame()
+      chip.layoutMode = 'HORIZONTAL'
+      chip.primaryAxisSizingMode = 'FIXED'
+      chip.counterAxisSizingMode = 'FIXED'
+      chip.resize(Math.max(100, previewWidth - 32), 36)
+      chip.cornerRadius = 18
+      chip.strokes = [COLOR_BORDER]
+      chip.strokeWeight = 1
+      chip.fills = (raw === true) ? [DARK] : [COLOR_WHITE]
+      return chip
+    }
+    if (v.resolvedType === 'FLOAT') {
+      if (/font|typography|type|line[\.\s\-_]*height|font[\.\s\-_]*size/i.test(v.name)) {
+        const fallbackText = makeText('Aa', FONT_REGULAR, 16)
+        fallbackText.fills = [DARK]
+        return makeLeftAlignedPreview(fallbackText)
+      }
+      const n = resolveNumericValue(raw, modeId)
+      const bar = figma.createRectangle()
+      bar.resize(Math.max(8, Math.min(previewWidth, n)), 20)
+      bar.cornerRadius = 6
+      bar.fills = [COLOR_BG_LIGHT]
+      return bar
+    }
+    if (
+      (v.resolvedType === 'STRING' && /(^|\/)(font|typography|type)(\/|$)|\b(font|typography|type|weight|family)\b/i.test(v.name)) ||
+      (v.resolvedType === 'FLOAT' && /(^|[\.\/_-])fw([\.\/_-]|$)|\bfont[\.\s\-_]*weight\b/i.test(v.name))
+    ) {
+      const sample = makeText('Aa', FONT_REGULAR, 28)
+      sample.fills = [DARK]
+      return makeLeftAlignedPreview(sample)
+    }
+    const t = makeText(v.resolvedType || 'Value', FONT_REGULAR, FONT_SIZE)
+    return t
+  } catch (e) {
+    return null
+  }
+}
+
+function summarizePaintStyleValue(s: PaintStyle): string {
+  const p = (s.paints || [])[0] as any
+  if (!p) return '—'
+  if (p.type === 'SOLID' && p.color) {
+    try { return figmaRGBToHex(p.color as any) } catch (e) { return 'solid' }
+  }
+  if (String(p.type || '').indexOf('GRADIENT') >= 0) return String(p.type).toLowerCase()
+  return String(p.type || 'paint')
+}
+
+function getVariableFromBinding(binding: any): Variable | null {
+  try {
+    if (!binding) return null
+    if (typeof binding === 'string') return figma.variables.getVariableById(binding)
+    if (Array.isArray(binding)) {
+      for (let i = 0; i < binding.length; i++) {
+        const found = getVariableFromBinding(binding[i])
+        if (found) return found
+      }
+      return null
+    }
+    if (typeof binding === 'object' && typeof (binding as any).id === 'string') {
+      return figma.variables.getVariableById((binding as any).id)
+    }
+    if (typeof binding === 'object' && typeof (binding as any).variableId === 'string') {
+      return figma.variables.getVariableById((binding as any).variableId)
+    }
+    if (typeof binding === 'object') {
+      const obj: any = binding
+      const keys = Object.keys(obj)
+      for (let i = 0; i < keys.length; i++) {
+        const found = getVariableFromBinding(obj[keys[i]])
+        if (found) return found
+      }
+    }
+  } catch (e) {}
+  return null
+}
+
+function getVariablePreferredModeId(v: Variable): string {
+  try {
+    const c = figma.variables.getVariableCollectionById(v.variableCollectionId)
+    if (c) {
+      const anyCollection = c as any
+      if (typeof anyCollection.defaultModeId === 'string' && anyCollection.defaultModeId) {
+        return anyCollection.defaultModeId
+      }
+      const preferred = getCollectionPrimaryMode(c)
+      if (preferred && preferred.modeId) return preferred.modeId
+    }
+  } catch (e) {}
+  const keys = Object.keys(v.valuesByMode || {})
+  return keys.length ? keys[0] : ''
+}
+
+function summarizeBoundEffectProperty(raw: any, binding: any, unit: string, formatter?: (v: any) => string): { primary: string; fallback: string; hasBinding: boolean } {
+  const valueFormatter = formatter || formatResolvedValue
+  const formattedRaw = valueFormatter(raw)
+  const fallback = (unit && typeof raw === 'number') ? (String(raw) + unit) : formattedRaw
+  const variable = getVariableFromBinding(binding)
+  if (!variable) return { primary: fallback, fallback: fallback, hasBinding: false }
+
+  const modeId = getVariablePreferredModeId(variable)
+  const variableRaw = (variable.valuesByMode || ({} as any))[modeId]
+  const resolved = resolveAliasValueForMode(variableRaw, modeId)
+  let resolvedText = valueFormatter(resolved)
+  if (unit && typeof resolved === 'number') resolvedText += unit
+
+  const ref = makeVariableReference(variable.name)
+  return {
+    primary: ref,
+    fallback: resolvedText && resolvedText !== '—' ? resolvedText : fallback,
+    hasBinding: true,
+  }
+}
+
+function summarizeEffectStyleValue(s: EffectStyle): string {
+  const e = (s.effects || [])[0] as any
+  if (!e) return '—'
+
+  const bound = (e && typeof e === 'object' && e.boundVariables && typeof e.boundVariables === 'object') ? e.boundVariables : {}
+
+  function boundProp(key: string): any {
+    if (!bound) return null
+    if (Object.prototype.hasOwnProperty.call(bound, key)) return bound[key]
+    return null
+  }
+
+  function boundNested(parent: string, key: string): any {
+    if (!bound) return null
+    const parentValue = boundProp(parent)
+    if (!parentValue || typeof parentValue !== 'object') return null
+    if (Object.prototype.hasOwnProperty.call(parentValue, key)) return parentValue[key]
+    return null
+  }
+
+  if (e.type === 'DROP_SHADOW' || e.type === 'INNER_SHADOW') {
+    const ox = Math.round((e.offset && e.offset.x) || 0)
+    const oy = Math.round((e.offset && e.offset.y) || 0)
+    const blur = Math.round(e.radius || 0)
+    const spread = Math.round(e.spread || 0)
+    const color = (e.color && typeof e.color === 'object') ? e.color : null
+
+    const xPart = summarizeBoundEffectProperty(ox, boundProp('offsetX') || boundNested('offset', 'x'), 'px')
+    const yPart = summarizeBoundEffectProperty(oy, boundProp('offsetY') || boundNested('offset', 'y'), 'px')
+    const blurPart = summarizeBoundEffectProperty(blur, boundProp('radius') || boundProp('blur'), 'px')
+    const spreadPart = summarizeBoundEffectProperty(spread, boundProp('spread'), 'px')
+    const colorPart = summarizeBoundEffectProperty(color, boundProp('color'), '', v => {
+      if (v && typeof v === 'object' && v.r !== undefined && v.g !== undefined && v.b !== undefined) {
+        try { return figmaRGBToHex(v as any) } catch (e) { return 'color' }
+      }
+      return formatResolvedValue(v)
+    })
+
+    const hasBindings = xPart.hasBinding || yPart.hasBinding || blurPart.hasBinding || spreadPart.hasBinding || colorPart.hasBinding
+    if (!hasBindings) return `${e.type.toLowerCase()}: ${ox}px ${oy}px ${blur}px ${spread}px ${colorPart.fallback}`
+
+    const primary = `${e.type.toLowerCase()}: x ${xPart.primary}, y ${yPart.primary}, blur ${blurPart.primary}, spread ${spreadPart.primary}, color ${colorPart.primary}`
+    const fallback = `x ${xPart.fallback}, y ${yPart.fallback}, blur ${blurPart.fallback}, spread ${spreadPart.fallback}, color ${colorPart.fallback}`
+    return `${primary} (${fallback})`
+  }
+  if (e.type === 'LAYER_BLUR' || e.type === 'BACKGROUND_BLUR') {
+    const blur = Math.round(e.radius || 0)
+    const blurPart = summarizeBoundEffectProperty(blur, boundProp('radius') || boundProp('blur'), 'px')
+    if (!blurPart.hasBinding) return `${e.type.toLowerCase()}: ${blurPart.fallback}`
+    return `${e.type.toLowerCase()}: ${blurPart.primary} (${blurPart.fallback})`
+  }
+  return String(e.type || 'effect').toLowerCase()
+}
+
+function summarizeTextStyleValue(s: TextStyle): string {
+  const ts: any = s as any
+  const bound = (ts && typeof ts === 'object' && ts.boundVariables && typeof ts.boundVariables === 'object') ? ts.boundVariables : {}
+
+  function getBoundByPath(path: string): any {
+    if (!bound || !path) return null
+    const parts = path.split('.')
+    let current: any = bound
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i]
+      if (!current || typeof current !== 'object') return null
+      if (!Object.prototype.hasOwnProperty.call(current, part)) return null
+      current = current[part]
+    }
+    return current
+  }
+
+  function boundProp(paths: string[]): any {
+    if (!bound) return null
+    for (let i = 0; i < paths.length; i++) {
+      const v = getBoundByPath(paths[i])
+      if (v) return v
+    }
+    return null
+  }
+
+  function formatFontFamily(v: any): string {
+    if (!v) return '—'
+    if (typeof v === 'string') return v
+    if (typeof v === 'object' && typeof v.family === 'string') return v.family
+    return formatResolvedValue(v)
+  }
+
+  function formatFontStyle(v: any): string {
+    if (!v) return '—'
+    if (typeof v === 'string') return v
+    if (typeof v === 'object' && typeof v.style === 'string') return v.style
+    return formatResolvedValue(v)
+  }
+
+  function formatSizePx(v: any): string {
+    if (typeof v === 'number') {
+      const rounded = Math.round(v * 100) / 100
+      return `${String(rounded)}px`
+    }
+    return formatResolvedValue(v)
+  }
+
+  function formatDimension(v: any): string {
+    if (v === null || v === undefined) return '—'
+    if (typeof v === 'number') {
+      const rounded = Math.round(v * 100) / 100
+      return `${String(rounded)}px`
+    }
+    if (typeof v === 'object') {
+      const unit = String((v as any).unit || '').toUpperCase()
+      const value = (v as any).value
+      if (unit === 'AUTO') return 'auto'
+      if (typeof value === 'number') {
+        const rounded = Math.round(value * 100) / 100
+        if (unit === 'PIXELS') return `${rounded}px`
+        if (unit === 'PERCENT') return `${rounded}%`
+        return `${rounded}${unit ? ' ' + unit.toLowerCase() : ''}`.trim()
+      }
+    }
+    return formatResolvedValue(v)
+  }
+
+  function toLine(label: string, part: { primary: string; fallback: string; hasBinding: boolean }): string {
+    if (part.hasBinding) return `${label}: ${part.primary} (${part.fallback})`
+    return `${label}: ${part.fallback}`
+  }
+
+  const fontName = ts.fontName && typeof ts.fontName === 'object' ? ts.fontName : null
+  const familyPart = summarizeBoundEffectProperty(
+    fontName ? { family: fontName.family } : null,
+    boundProp(['fontFamily', 'fontName.family', 'fontName']),
+    '',
+    formatFontFamily,
+  )
+  const stylePart = summarizeBoundEffectProperty(
+    fontName ? { style: fontName.style } : null,
+    boundProp(['fontStyle', 'fontName.style', 'fontName']),
+    '',
+    formatFontStyle,
+  )
+  const sizePart = summarizeBoundEffectProperty(ts.fontSize, boundProp(['fontSize', 'typography.fontSize']), 'px', formatSizePx)
+  const lineHeightPart = summarizeBoundEffectProperty(ts.lineHeight, boundProp(['lineHeight', 'lineHeight.value', 'typography.lineHeight']), '', formatDimension)
+  const letterSpacingPart = summarizeBoundEffectProperty(ts.letterSpacing, boundProp(['letterSpacing', 'letterSpacing.value', 'typography.letterSpacing']), '', formatDimension)
+
+  const lines = [
+    toLine('fontFamily', familyPart),
+    toLine('fontWeight', stylePart),
+    toLine('fontSize', sizePart),
+    toLine('lineHeight', lineHeightPart),
+    toLine('letterSpacing', letterSpacingPart),
+  ]
+  return lines.join('\n')
+}
+
+function summarizeLayoutStyleValue(s: GridStyle): string {
+  const grids = (s as any).layoutGrids || []
+  if (!grids.length) return '—'
+  const g: any = grids[0]
+  const pattern = g.pattern || 'GRID'
+  const count = g.count !== undefined ? g.count : '-'
+  const gutter = g.gutterSize !== undefined ? g.gutterSize : '-'
+  return `${String(pattern).toLowerCase()} • count ${count} • gutter ${gutter}`
+}
+
+function makeStylePreview(styleId: string, kind: 'paint' | 'effect' | 'text' | 'layout'): SceneNode | null {
+  try {
+    const previewWidth = PREVIEW_COLUMN_WIDTH
+    const previewHeight = TOKEN_ROW_HEIGHT
+    if (kind === 'paint') {
+      const r = figma.createRectangle()
+      r.resize(previewWidth, previewHeight)
+      r.cornerRadius = 0
+      ;(r as any).fillStyleId = styleId
+      return r
+    }
+    if (kind === 'effect') {
+      const wrap = figma.createFrame()
+      wrap.name = 'effect-style-preview-wrap'
+      wrap.layoutMode = 'HORIZONTAL'
+      wrap.primaryAxisSizingMode = 'FIXED'
+      wrap.counterAxisSizingMode = 'FIXED'
+      wrap.resize(previewWidth, previewHeight)
+      wrap.itemSpacing = 0
+      wrap.paddingLeft = 24
+      wrap.paddingRight = 0
+      wrap.paddingTop = 0
+      wrap.paddingBottom = 0
+      wrap.counterAxisAlignItems = 'CENTER'
+      wrap.primaryAxisAlignItems = 'MIN'
+      wrap.fills = []
+
+      const r = figma.createRectangle()
+      r.resize(40, 40)
+      r.cornerRadius = 16
+      r.fills = [COLOR_WHITE]
+      ;(r as any).effectStyleId = styleId
+      wrap.appendChild(r)
+      return wrap
+    }
+    if (kind === 'text') {
+      const wrap = createAutolayout('text-style-preview-wrap', 'HORIZONTAL', 0, 24, 0, 'FIXED', 'HUG')
+      wrap.resizeWithoutConstraints(previewWidth, 1)
+      wrap.counterAxisAlignItems = 'MIN'
+      wrap.primaryAxisAlignItems = 'MIN'
+
+      const t = makeText('The quick brown fox', FONT_REGULAR, 24)
+      try { ;(t as any).textStyleId = styleId } catch (e) {}
+      t.fills = [DARK]
+      t.resizeWithoutConstraints(Math.max(80, previewWidth - 48), t.height)
+      wrap.appendChild(t)
+      return wrap
+    }
+    const r = figma.createRectangle()
+    r.resize(previewWidth, previewHeight)
+    r.cornerRadius = 0
+    r.fills = [COLOR_BG_LIGHT]
+    return r
+  } catch (e) {
+    return null
+  }
+}
+
 // Action for selected nodes
 async function writeVariables(onProgress?: (text: string) => void) {
+  await ensureTokenFontsLoaded()
 
-  await figma.loadFontAsync(FONT_REGULAR)
-  await figma.loadFontAsync(FONT_SEMIBOLD)
-  await figma.loadFontAsync(FONT_ITALIC)
   for (const c of activeCollections) {
     if (onProgress) onProgress('Collection: ' + c.name)
 
-    // Create a vertical container per collection (we'll add rows inside)
-    const collectionBox: FrameNode = createAutolayout(c.name, 'VERTICAL', GAP_BETWEEN_SECTIONS, 0, 0)
-    collectionBox.fills = [LIGHT]
-    collectionBox.layoutSizingVertical = 'HUG'
-    collectionBox.layoutSizingHorizontal = 'HUG'
-    collectionBox.minWidth = MAX_COLUMN_WIDTH
-    variablesFrame.appendChild(collectionBox)
+    const allCollectionVariables = c.variableIds
+      .map(id => figma.variables.getVariableById(id))
+      .filter(Boolean) as Variable[]
+    // Keep Figma collection order so generated docs match the Variables panel.
 
-    const variables = c.variableIds.map(id => figma.variables.getVariableById(id))
-    variables.sort((a, b) => naturalSort(a.name, b.name))
+    const hasGroupConfig = Object.prototype.hasOwnProperty.call(activeCollectionGroupsById, c.id)
+    const selectedGroups = hasGroupConfig ? (activeCollectionGroupsById[c.id] || []) : ['*']
+    const allowAllGroups = selectedGroups.indexOf('*') !== -1
+    const selectedPrefixes = selectedGroups.filter(g => g && g !== '*')
+    let variables = allowAllGroups
+      ? allCollectionVariables
+      : allCollectionVariables.filter(v => {
+          const groupPath = getVariableGroupPath(v.name)
+          if (!groupPath) return false
+          for (const prefix of selectedPrefixes) {
+            if (groupPath === prefix || groupPath.indexOf(prefix + '/') === 0) return true
+          }
+          return false
+        })
 
-    // Build mode list once per collection
-    const modes = c.modes
-
-    // Header row: collection title on the left, mode titles on the right
-    const headerRow: FrameNode = createAutolayout(c.name + '-modes-header', 'HORIZONTAL', GAP_BETWEEN_ROWS, 0, 0, 'HUG')
-    collectionBox.appendChild(headerRow)
-    headerRow.layoutSizingHorizontal = 'HUG'
-    headerRow.minWidth = MAX_COLUMN_WIDTH
-    headerRow.strokes = [{ type: 'SOLID', color: hexToRGB('#cccccc') }]
-    headerRow.strokeWeight = 1
-    headerRow.dashPattern = [4, 4]
-    headerRow.strokeBottomWeight = 1
-    headerRow.strokeTopWeight = 0
-    headerRow.strokeLeftWeight = 0
-    headerRow.strokeRightWeight = 0
-
-    // Left header cell contains the collection title
-    const leftHeader: FrameNode = createAutolayout('left-header', 'VERTICAL', 4, ROW_PADDING, ROW_PADDING)
-    headerRow.appendChild(leftHeader)
-    leftHeader.layoutSizingHorizontal = 'FIXED'
-    leftHeader.resizeWithoutConstraints(LEFT_COLUMN_WIDTH, leftHeader.height)
-    const cHeader = makeText(sanitizeName(c.name), FONT_SEMIBOLD, L_FONT_SIZE)
-    addToColumn(leftHeader, cHeader)
-
-    // Mode headers (fixed-width columns)
-    for (const m of modes) {
-      const headerCell: FrameNode = createAutolayout('mode-header-' + m.modeId, 'VERTICAL', 0, ROW_PADDING, ROW_PADDING)
-      headerRow.appendChild(headerCell)
-      headerCell.layoutSizingHorizontal = 'HUG'
-      headerCell.layoutSizingVertical = 'FILL'
-      headerCell.minWidth = MIN_MODE_COLUMN_WIDTH
-      headerCell.primaryAxisAlignItems = 'CENTER'
-      headerCell.counterAxisAlignItems = 'CENTER'
-      
-      // Add mode-appropriate background to header
-      if (m.name.toLowerCase() === 'dark') {
-        headerCell.fills = [COLOR_DARK_MODE_BG]
-        headerCell.topLeftRadius = 16
-        headerCell.topRightRadius = 16
-      }
-      
-      const valueHeader = makeText((m.name === DEFAULT_MODE_NAME && modes.length === 1) ? 'Value' : m.name, FONT_SEMIBOLD, FONT_SIZE)
-      valueHeader.fills = m.name.toLowerCase() === 'dark' ? [COLOR_DARK_MODE_TEXT] : [{ type: 'SOLID', color: hexToRGB('#000000') }]
-      addToColumn(headerCell, valueHeader)
-      valueHeader.textAlignVertical = 'CENTER'
+    // Fallback for collections whose naming may drift from group-path parsing;
+    // prefer documenting matching tokens over producing an empty output.
+    if (!allowAllGroups && !variables.length && selectedPrefixes.length) {
+      const lowerPrefixes = selectedPrefixes.map(p => p.toLowerCase())
+      variables = allCollectionVariables.filter(v => {
+        const name = (v.name || '').toLowerCase()
+        for (const prefix of lowerPrefixes) {
+          if (!prefix) continue
+          if (name === prefix) return true
+          if (name.indexOf(prefix + '/') === 0) return true
+          if (name.indexOf('/' + prefix + '/') !== -1) return true
+          if (name.indexOf('.' + prefix + '.') !== -1) return true
+        }
+        return false
+      })
     }
 
-    // Rows: one per variable
-    for (const v of variables) {
-      if (onProgress) onProgress('Variable: ' + v.name)
-      const row: FrameNode = createAutolayout('row-' + v.name, 'HORIZONTAL', GAP_BETWEEN_ROWS, 0, 0, 'HUG')
-      collectionBox.appendChild(row)
-      row.layoutSizingHorizontal = 'HUG'
-      row.minWidth = MAX_COLUMN_WIDTH
-      
-      // Add border to all except last
-      const isLast = variables.indexOf(v) === variables.length - 1
-      if (!isLast) {
-        row.strokes = [{ type: 'SOLID', color: hexToRGB('#cccccc') }]
-        row.strokeWeight = 1
-        row.dashPattern = [4, 4]
-        row.strokeBottomWeight = 1
-        row.strokeTopWeight = 0
-        row.strokeLeftWeight = 0
-        row.strokeRightWeight = 0
-      }
+    if (!variables.length && allCollectionVariables.length && !allowAllGroups) {
+      figma.ui.postMessage({ type: 'tokens-status', text: 'No tokens matched selected groups in collection: ' + c.name })
+    }
+    if (!variables.length) continue
 
-      // Left cell: name + description (vertical)
-      const leftCell: FrameNode = createAutolayout('left-' + v.name, 'VERTICAL', 4)
-      row.appendChild(leftCell)
-      leftCell.layoutSizingHorizontal = 'FIXED'
-      leftCell.resizeWithoutConstraints(LEFT_COLUMN_WIDTH, leftCell.height)
-      leftCell.paddingTop = ROW_PADDING
-      leftCell.paddingBottom = ROW_PADDING
-      leftCell.paddingLeft = ROW_PADDING
-      leftCell.paddingRight = ROW_PADDING
+    const mode = getCollectionPrimaryMode(c)
+    const grouped = groupByTokenPath(variables, v => v.name)
+    variablesFrame.appendChild(createTokenGroupTitle(c.name))
+    for (let gi = 0; gi < grouped.length; gi++) {
+      const group = grouped[gi]
+      const normalizedPath = normalizeGroupPathForCollection(group.path, c.name)
+      const subgroupLabel = getLeafGroupLabel(normalizedPath)
+      const subgroupDisplay = getParentAndLeafGroupLabel(normalizedPath)
+      variablesFrame.appendChild(createTokenSubgroupTitle(subgroupDisplay))
+      const section = createTokenTableSection('Variables - ' + c.name + '-' + subgroupLabel)
+      variablesFrame.appendChild(section)
+      section.appendChild(createTokenHeaderRow(subgroupDisplay))
 
-      const vName = makeText(sanitizeName(v.name), FONT_SEMIBOLD, FONT_SIZE)
-      addToColumn(leftCell, vName)
-      const vDesc = makeText(v.description || 'no description', FONT_REGULAR, 14)
-      vDesc.fills = [COLOR_TEXT_SECONDARY]
-      addToColumn(leftCell, vDesc)
-      count++
-
-      // Right cells: one per mode (value previews)
-      for (const m of modes) {
-        const isDark = m.name.toLowerCase() === 'dark'
-        const isLastRow = variables.indexOf(v) === variables.length - 1
-        const valueColumn: FrameNode = createAutolayout('value-' + v.name + '-' + m.modeId, 'VERTICAL', isDark ? 8 : 8)
-        row.appendChild(valueColumn)
-        valueColumn.layoutSizingHorizontal = 'HUG'
-        valueColumn.layoutSizingVertical = 'FILL'
-        valueColumn.minWidth = MIN_MODE_COLUMN_WIDTH
-        if (modes.length > 2) valueColumn.maxWidth = 500
-        valueColumn.setExplicitVariableModeForCollection(c.id, m.modeId)
-        
-        // Add mode-appropriate background
-        if (isDark) {
-          valueColumn.fills = [COLOR_DARK_MODE_BG]
-          valueColumn.strokes = [COLOR_DARK_MODE_BORDER]
-          valueColumn.strokeWeight = 1
-          valueColumn.paddingTop = ROW_PADDING
-          valueColumn.paddingBottom = ROW_PADDING
-          valueColumn.paddingLeft = ROW_PADDING
-          valueColumn.paddingRight = ROW_PADDING
-          if (isLastRow) {
-            valueColumn.bottomLeftRadius = 16
-            valueColumn.bottomRightRadius = 16
-          }
-        } else {
-          valueColumn.fills = []
-          valueColumn.paddingTop = ROW_PADDING
-          valueColumn.paddingBottom = ROW_PADDING
-          valueColumn.paddingLeft = ROW_PADDING
-          valueColumn.paddingRight = ROW_PADDING
-        }
-        
-        // Allow overflow for interaction/focus mode previews so shadows/overlays are visible
-        if (typeof m.name === 'string' && /interaction|focus/i.test(m.name)) {
-          valueColumn.clipsContent = false
-          row.clipsContent = false
-        }
-
-        // Resolve value for this variable + mode
-        const rawValue: any = v.valuesByMode[m.modeId]
-        const type = v.resolvedType
-        let valueStr = ''
-        let font = FONT_REGULAR
-        let isAlias = false
-        if (rawValue && typeof rawValue === 'object' && rawValue.type === 'VARIABLE_ALIAS') {
-          isAlias = true
-          const aliased = figma.variables.getVariableById(rawValue.id)
-          valueStr = aliased ? aliased.name.toString() : String(rawValue.id)
-          font = FONT_ITALIC
-        } else {
-          // Handle color, paint/gradient, and effect variable values
-          if (type === 'COLOR') {
-            valueStr = figmaRGBToHex(rawValue as any)
-          } else if (rawValue && typeof rawValue === 'object' && (rawValue.paints || (Array.isArray(rawValue) && rawValue[0] && rawValue[0].type))) {
-            // Paint or gradient-like object
-            const paints = rawValue.paints ? rawValue.paints : (Array.isArray(rawValue) ? rawValue : [rawValue])
-            const first = paints[0]
-            if (first) {
-              if (first.type === 'SOLID' && first.color) {
-                valueStr = figmaRGBToHex(first.color as any)
-              } else if (first.gradientStops && Array.isArray(first.gradientStops)) {
-                // Render gradient preview as actual gradient
-                const gradientPreview = figma.createRectangle()
-                gradientPreview.resize(PREVIEW_WIDTH, PREVIEW_HEIGHT)
-                // Bind the gradient variable
-                try {
-                  const gradFills = JSON.parse(JSON.stringify(gradientPreview.fills))
-                  gradFills[0] = figma.variables.setBoundVariableForPaint(gradFills[0], 'color', v)
-                  gradientPreview.fills = gradFills
-                } catch (e) {
-                  // Fallback: just set the paint directly
-                  gradientPreview.fills = [first as Paint]
-                }
-                valueColumn.appendChild(gradientPreview)
-                
-                const gtype = (first.type || 'GRADIENT').replace(/^GRADIENT_?/i, '')
-                const gradientType = gtype.charAt(0).toUpperCase() + gtype.slice(1).toLowerCase()
-                
-                // Create header: gradient type + first position
-                const firstPos = Math.round((first.gradientStops[0]?.position || 0) * 100) + '%'
-                const gradientHeader = makeText(gradientType + ' — ' + firstPos, FONT_REGULAR, FONT_SIZE)
-                gradientHeader.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [DARK]
-                valueColumn.appendChild(gradientHeader)
-
-                // Render each stop as a row with swatch + label + hex
-                for (const s of first.gradientStops) {
-                  const stopRow: FrameNode = createAutolayout('gradient-stop', 'HORIZONTAL', GAP_SWATCH_ITEMS)
-                  valueColumn.appendChild(stopRow)
-
-                  // Find variable that matches this stop's color in current mode
-                  const colorVar = resolveColorVariableForMode(s.color, c.id, m.modeId)
-                  
-                  // Create swatch
-                  const swatchPreview = figma.createRectangle()
-                  swatchPreview.resize(SWATCH_SIZE, SWATCH_SIZE)
-                  swatchPreview.cornerRadius = BORDER_RADIUS_SM
-                  
-                  if (colorVar) {
-                    // Set mode FIRST, then bind variable
-                    swatchPreview.setExplicitVariableModeForCollection(c.id, m.modeId)
-                    const swatchFills = JSON.parse(JSON.stringify(swatchPreview.fills))
-                    try { swatchFills[0] = figma.variables.setBoundVariableForPaint(swatchFills[0], 'color', colorVar) } catch (e) { }
-                    swatchPreview.fills = swatchFills
-                  } else {
-                    // No variable found, use static color
-                    const col: RGB = { r: s.color.r || 0, g: s.color.g || 0, b: s.color.b || 0 }
-                    const alpha = (s.color.a !== undefined) ? s.color.a : 1
-                    swatchPreview.fills = [{ type: 'SOLID', color: col, opacity: alpha } as Paint]
-                  }
-                  stopRow.appendChild(swatchPreview)
-
-                  // Label - use variable name if found
-                  const label = colorVar ? sanitizeName(colorVar.name) : resolveColorLabel(s.color)
-                  const labelTxt = makeText(label, FONT_REGULAR, FONT_SIZE)
-                  labelTxt.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [DARK]
-                  stopRow.appendChild(labelTxt)
-
-                  // Show hex alongside variable name
-                  if (colorVar) {
-                    const hex = figmaRGBToHex(s.color)
-                    const hexTxt = makeText(hex, FONT_REGULAR, FONT_SIZE)
-                    hexTxt.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [COLOR_TEXT_SECONDARY]
-                    stopRow.appendChild(hexTxt)
-                  }
-                }
-
-                // Last position on its own line
-                const lastPos = Math.round((first.gradientStops[first.gradientStops.length - 1]?.position || 1) * 100) + '%'
-                const gradientFooter = makeText(lastPos, FONT_REGULAR, FONT_SIZE)
-                gradientFooter.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [DARK]
-                valueColumn.appendChild(gradientFooter)
-                
-                valueStr = '' // Already rendered visually
-              } else {
-                valueStr = first.type ? String(first.type) : JSON.stringify(first)
-              }
-            }
-          } else if (rawValue && typeof rawValue === 'object' && rawValue.effects) {
-            // Effects array
-            try {
-              const parts: string[] = (rawValue.effects as any[]).map(e => {
-                if (e.type === 'DROP_SHADOW' || e.type === 'INNER_SHADOW') {
-                  const ox = Math.round((e.offset && e.offset.x) || 0)
-                  const oy = Math.round((e.offset && e.offset.y) || 0)
-                  const blur = Math.round(e.radius || 0)
-                  const alpha = (e.color && e.color.a !== undefined) ? e.color.a : 1
-                  const col = e.color ? figmaRGBToHex(e.color) : ''
-                  return `${e.type} ${ox}px ${oy}px ${blur}px ${col} ${Math.round(alpha * 100)}%`
-                }
-                if (e.type === 'LAYER_BLUR' || e.type === 'BACKGROUND_BLUR') {
-                  return `${e.type} ${Math.round(e.radius || 0)}px`
-                }
-                return e.type
-              })
-              valueStr = parts.join('; ')
-            } catch (e) {
-              valueStr = JSON.stringify(rawValue.effects)
-            }
-          } else {
-            valueStr = (rawValue !== undefined && rawValue !== null) ? rawValue.toString() : ''
-          }
-        }
-
-        if (type === 'COLOR') {
-          // color preview with indicator and optional fallback hex
-          const previewRow: FrameNode = createAutolayout('preview-' + v.name + '-' + m.modeId, 'VERTICAL', GAP_PREVIEW_ITEMS)
-          valueColumn.appendChild(previewRow)
-          previewRow.layoutSizingHorizontal = 'FILL'
-
-              const colorPreview = figma.createRectangle()
-              colorPreview.resize(PREVIEW_WIDTH, PREVIEW_HEIGHT)
-              if (isAlias && 'cornerRadius' in colorPreview) colorPreview.cornerRadius = 4
-              if (!isAlias && 'cornerRadius' in colorPreview) colorPreview.cornerRadius = 24
-          const newFills = JSON.parse(JSON.stringify(colorPreview.fills))
-          try { newFills[0] = figma.variables.setBoundVariableForPaint(newFills[0], 'color', v) } catch (e) { }
-          colorPreview.fills = newFills
-          colorPreview.strokes = [DARK_20]
-          colorPreview.strokeWeight = 1
-          colorPreview.layoutAlign = 'STRETCH'
-          previewRow.appendChild(colorPreview)
-
-          // Extract the actual rendered color from the indicator
-          let displayHex = ''
-          try {
-            const fill = colorPreview.fills[0]
-            if (fill && fill.type === 'SOLID' && fill.color) {
-              displayHex = figmaRGBToHex(fill.color as any)
-            }
-          } catch (e) {
-            console.error('Error extracting color from indicator:', e)
-          }
-
-          // Create vertical stack for color name + hex
-          const textStack: FrameNode = createAutolayout('text-stack', 'VERTICAL', 4)
-          previewRow.appendChild(textStack)
-          textStack.layoutSizingHorizontal = 'FILL'
-
-          if (isAlias) {
-            // For aliases: show alias name + actual hex from preview
-            const aliasName = sanitizeName(valueStr) // Contains the aliased variable name
-            const labelText = makeText(aliasName, FONT_REGULAR, FONT_SIZE, false)
-            labelText.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [DARK]
-            labelText.layoutAlign = 'STRETCH'
-            textStack.appendChild(labelText)
-
-            // Always show hex for aliases using the preview color
-            const hexText = makeText(displayHex || valueStr, FONT_REGULAR, FONT_SIZE, false)
-            hexText.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [COLOR_TEXT_SECONDARY]
-            hexText.layoutAlign = 'STRETCH'
-            textStack.appendChild(hexText)
-          } else {
-            // For non-aliases: show only hex value from preview
-            const hexText = makeText(displayHex || valueStr, FONT_REGULAR, FONT_SIZE, false)
-            hexText.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [COLOR_TEXT_SECONDARY]
-            hexText.layoutAlign = 'STRETCH'
-            textStack.appendChild(hexText)
-          }
-
-        } else if (type === 'BOOLEAN') {
-          const box = figma.createFrame()
-          const isTrue = (String(valueStr).toLowerCase() === 'true')
-          box.resizeWithoutConstraints(96, 50)
-          box.cornerRadius = 12
-          box.fills = isTrue ? [DARK] : []
-          box.strokes = [DARK]
-          box.strokeWeight = 2
-          valueColumn.appendChild(box)
-        } else if (type === 'FLOAT' && v.name.toLowerCase().includes('radius')) {
-          // Radius variable - show preview with radius applied
-          const radiusPreview = figma.createRectangle()
-          radiusPreview.resize(PREVIEW_WIDTH, PREVIEW_HEIGHT)
-          radiusPreview.fills = [COLOR_BG_LIGHT]
-          // Bind the radius variable
-          try {
-            radiusPreview.setBoundVariable('topLeftRadius', v)
-            radiusPreview.setBoundVariable('topRightRadius', v)
-            radiusPreview.setBoundVariable('bottomLeftRadius', v)
-            radiusPreview.setBoundVariable('bottomRightRadius', v)
-          } catch (e) {
-            // Fallback: just set the radius value directly
-            const radiusValue = parseFloat(String(valueStr)) || 0
-            radiusPreview.cornerRadius = radiusValue
-          }
-          valueColumn.appendChild(radiusPreview)
-          
-          // Also show the text value
-          const txt = makeText((typeof valueStr === 'string') ? sanitizeName(valueStr) : String(valueStr), font, FONT_SIZE)
-          txt.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [DARK]
-          valueColumn.appendChild(txt)
-        } else if (type === 'FLOAT' && (v.name.toLowerCase().includes('space') || v.name.toLowerCase().includes('spacing') || v.name.toLowerCase().includes('gap'))) {
-          // Space/spacing variable - show preview with width equal to space value
-          const spaceContainer: FrameNode = createAutolayout('space-preview', 'HORIZONTAL', 0)
-          spaceContainer.counterAxisAlignItems = 'CENTER'
-          valueColumn.appendChild(spaceContainer)
-          
-          // Left ellipse (8x8)
-          const leftEllipse = figma.createEllipse()
-          leftEllipse.resize(8, 8)
-          leftEllipse.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [COLOR_BORDER]
-          spaceContainer.appendChild(leftEllipse)
-          
-          // Rectangle with width bound to the variable
-          const spacePreview = figma.createRectangle()
-          spacePreview.resize(Math.max(parseFloat(String(valueStr)) || 1, 1), PREVIEW_HEIGHT)
-          spacePreview.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [COLOR_BG_LIGHT]
-          // Try to bind the width variable
-          try {
-            spacePreview.setBoundVariable('width', v)
-          } catch (e) {
-            // If binding fails, keep the static size
-          }
-          spaceContainer.appendChild(spacePreview)
-          
-          // Right ellipse (8x8)
-          const rightEllipse = figma.createEllipse()
-          rightEllipse.resize(8, 8)
-          rightEllipse.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [COLOR_BORDER]
-          spaceContainer.appendChild(rightEllipse)
-          
-          // Also show the text value
-          const txt = makeText((typeof valueStr === 'string') ? sanitizeName(valueStr) : String(valueStr), font, FONT_SIZE)
-          txt.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [DARK]
-          valueColumn.appendChild(txt)
-        } else {
-          const txt = makeText((typeof valueStr === 'string') ? sanitizeName(valueStr) : String(valueStr), font, FONT_SIZE)
-          txt.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [DARK]
-          valueColumn.appendChild(txt)
+      for (let i = 0; i < group.items.length; i++) {
+        const v = group.items[i]
+        if (onProgress) onProgress('Variable: ' + v.name)
+        try {
+          const valueText = formatVariableCellValue(v, mode.modeId)
+          const preview = makeVariablePreview(v, mode.modeId)
+          appendTokenRow(
+            section,
+            'variable-row-' + v.id,
+            preview,
+            sanitizeName(getLeafTokenName(v.name)),
+            valueText,
+            v.description || 'no description',
+            i === group.items.length - 1
+          )
+          count++
+        } catch (e) {
+          skippedVariableRows.push(v.name)
+          const details = (e && (e as Error).message) ? (e as Error).message : String(e)
+          figma.ui.postMessage({ type: 'tokens-status', text: 'Skipped variable due to render error: ' + v.name + ' (' + details + ')' })
+          console.error('Token row render failed for variable', v.name, e)
         }
       }
     }
@@ -843,736 +1947,114 @@ async function writeVariables(onProgress?: (text: string) => void) {
 }
 
 async function writeStyles(onProgress?: (text: string) => void) {
-  // Get all modes from all active collections for styles that might reference variables
-  const allModes: { collectionId: string, modeId: string, name: string }[] = []
-  for (const c of activeCollections) {
-    for (const m of c.modes) {
-      allModes.push({ collectionId: c.id, modeId: m.modeId, name: m.name })
-    }
-  }
-  // Filter out default "Mode 1" if there are other modes
-  let modes = allModes.filter(m => m.name !== DEFAULT_MODE_NAME)
-  // If no modes left after filtering, use single default mode
-  if (modes.length === 0) {
-    modes = [{ collectionId: '', modeId: '', name: 'Value' }]
-  }
+  await ensureTokenFontsLoaded()
 
-  // Paint / Color styles (row-driven, matching variables structure)
-  const paintStyles = figma.getLocalPaintStyles().filter(s => activeColorStyleIds.indexOf(s.id) !== -1).sort((a, b) => naturalSort(a.name, b.name))
-  if (paintStyles.length) {
-    const collectionBox: FrameNode = createAutolayout('Color', 'VERTICAL', GAP_BETWEEN_SECTIONS, 0, 0)
-    collectionBox.fills = [LIGHT]
-    collectionBox.layoutSizingVertical = 'HUG'
-    collectionBox.layoutSizingHorizontal = 'HUG'
-    collectionBox.minWidth = MAX_COLUMN_WIDTH
-    stylesFrame.appendChild(collectionBox)
+  function resolveTextStyleSizeForSort(style: TextStyle): number {
+    try {
+      const ts: any = style as any
+      if (typeof ts.fontSize === 'number' && isFinite(ts.fontSize)) return ts.fontSize
 
-    // Header row: "Color" title on left, mode names on right
-    const headerRow: FrameNode = createAutolayout('color-styles-header', 'HORIZONTAL', GAP_BETWEEN_ROWS, 0, 0, 'HUG')
-    collectionBox.appendChild(headerRow)
-    headerRow.layoutSizingHorizontal = 'HUG'
-    headerRow.minWidth = MAX_COLUMN_WIDTH
-    headerRow.strokes = [{ type: 'SOLID', color: hexToRGB('#cccccc') }]
-    headerRow.strokeWeight = 1
-    headerRow.dashPattern = [4, 4]
-    headerRow.strokeBottomWeight = 1
-    headerRow.strokeTopWeight = 0
-    headerRow.strokeLeftWeight = 0
-    headerRow.strokeRightWeight = 0
-
-    // Left header cell
-    const leftHeader: FrameNode = createAutolayout('left-header', 'VERTICAL', 4, ROW_PADDING, ROW_PADDING)
-    headerRow.appendChild(leftHeader)
-    leftHeader.layoutSizingHorizontal = 'FIXED'
-    leftHeader.resizeWithoutConstraints(LEFT_COLUMN_WIDTH, leftHeader.height)
-    const cHeader = makeText('Color', FONT_SEMIBOLD, L_FONT_SIZE)
-    addToColumn(leftHeader, cHeader)
-
-    // Mode headers (fixed-width columns)
-    for (const m of modes) {
-      const headerCell: FrameNode = createAutolayout('mode-header-' + m.modeId, 'VERTICAL', 0, ROW_PADDING, ROW_PADDING)
-      headerRow.appendChild(headerCell)
-      headerCell.layoutSizingHorizontal = 'HUG'
-      headerCell.layoutSizingVertical = 'FILL'
-      headerCell.minWidth = MIN_MODE_COLUMN_WIDTH
-      if (modes.length > 2) headerCell.maxWidth = 500
-      headerCell.primaryAxisAlignItems = 'CENTER'
-      headerCell.counterAxisAlignItems = 'CENTER'
-      
-      if (m.name.toLowerCase() === 'dark') {
-        headerCell.fills = [COLOR_DARK_MODE_BG]
-        headerCell.topLeftRadius = 16
-        headerCell.topRightRadius = 16
+      const bound = ts && typeof ts === 'object' && ts.boundVariables && typeof ts.boundVariables === 'object'
+        ? ts.boundVariables
+        : null
+      const binding = bound && Object.prototype.hasOwnProperty.call(bound, 'fontSize') ? bound.fontSize : null
+      const variable = getVariableFromBinding(binding)
+      if (variable) {
+        const modeId = getVariablePreferredModeId(variable)
+        const raw = (variable.valuesByMode || ({} as any))[modeId]
+        const resolved = resolveAliasValueForMode(raw, modeId)
+        if (typeof resolved === 'number' && isFinite(resolved)) return resolved
+        const parsed = parseFloat(String(resolved ?? ''))
+        if (isFinite(parsed)) return parsed
       }
-      
-      const valueHeader = makeText((m.name === DEFAULT_MODE_NAME && modes.length === 1) ? 'Value' : m.name, FONT_SEMIBOLD, FONT_SIZE)
-      valueHeader.fills = m.name.toLowerCase() === 'dark' ? [COLOR_DARK_MODE_TEXT] : [{ type: 'SOLID', color: hexToRGB('#000000') }]
-      addToColumn(headerCell, valueHeader)
-      valueHeader.textAlignVertical = 'CENTER'
-    }
-
-    // Rows: one per style
-    for (const s of paintStyles) {
-      if (onProgress) onProgress('Color style: ' + s.name)
-      const row: FrameNode = createAutolayout('row-' + s.name, 'HORIZONTAL', GAP_BETWEEN_ROWS, 0, 0, 'HUG')
-      collectionBox.appendChild(row)
-      row.layoutSizingHorizontal = 'HUG'
-      row.minWidth = MAX_COLUMN_WIDTH
-      
-      // Add border to all except last
-      const isLast = paintStyles.indexOf(s) === paintStyles.length - 1
-      if (!isLast) {
-        row.strokes = [{ type: 'SOLID', color: hexToRGB('#cccccc') }]
-        row.strokeWeight = 1
-        row.dashPattern = [4, 4]
-        row.strokeBottomWeight = 1
-        row.strokeTopWeight = 0
-        row.strokeLeftWeight = 0
-        row.strokeRightWeight = 0
-      }
-
-      // Left cell: name + description
-      const leftCell: FrameNode = createAutolayout('left-' + s.name, 'VERTICAL', 4)
-      row.appendChild(leftCell)
-      leftCell.layoutSizingHorizontal = 'FIXED'
-      leftCell.resizeWithoutConstraints(LEFT_COLUMN_WIDTH, leftCell.height)
-      leftCell.paddingTop = ROW_PADDING
-      leftCell.paddingBottom = ROW_PADDING
-      leftCell.paddingLeft = ROW_PADDING
-      leftCell.paddingRight = ROW_PADDING
-
-      const sName = makeText(sanitizeName(s.name), FONT_SEMIBOLD, FONT_SIZE)
-      addToColumn(leftCell, sName)
-      const sDesc = makeText(s.description || 'no description', FONT_REGULAR, 14)
-      sDesc.fills = [COLOR_TEXT_SECONDARY]
-      addToColumn(leftCell, sDesc)
-
-      // Right cells: one per mode
-      for (const m of modes) {
-        const isDark = m.name.toLowerCase() === 'dark'
-        const isLastRow = paintStyles.indexOf(s) === paintStyles.length - 1
-        const valueColumn: FrameNode = createAutolayout('value-' + s.name + '-' + m.modeId, 'VERTICAL', isDark ? 8 : 8)
-        row.appendChild(valueColumn)
-        valueColumn.layoutSizingHorizontal = 'HUG'
-        valueColumn.layoutSizingVertical = 'FILL'
-        valueColumn.minWidth = MIN_MODE_COLUMN_WIDTH
-        if (modes.length > 2) valueColumn.maxWidth = 500
-        
-        if (m.collectionId) {
-          valueColumn.setExplicitVariableModeForCollection(m.collectionId, m.modeId)
-        }
-        
-        // Add mode-appropriate background
-        if (isDark) {
-          valueColumn.fills = [COLOR_DARK_MODE_BG]
-          valueColumn.strokes = [COLOR_DARK_MODE_BORDER]
-          valueColumn.strokeWeight = 1
-          valueColumn.paddingTop = ROW_PADDING
-          valueColumn.paddingBottom = ROW_PADDING
-          valueColumn.paddingLeft = ROW_PADDING
-          valueColumn.paddingRight = ROW_PADDING
-          if (isLastRow) {
-            valueColumn.bottomLeftRadius = 16
-            valueColumn.bottomRightRadius = 16
-          }
-        } else {
-          valueColumn.fills = []
-          valueColumn.paddingTop = ROW_PADDING
-          valueColumn.paddingBottom = ROW_PADDING
-          valueColumn.paddingLeft = ROW_PADDING
-          valueColumn.paddingRight = ROW_PADDING
-        }
-
-        // Color preview with style applied
-        const colorPreview = figma.createRectangle()
-        colorPreview.resize(PREVIEW_WIDTH, PREVIEW_HEIGHT)
-        colorPreview.cornerRadius = 24
-        if (m.collectionId) {
-          colorPreview.setExplicitVariableModeForCollection(m.collectionId, m.modeId)
-        }
-        // @ts-ignore - fillStyleId is supported on shapes
-        colorPreview.fillStyleId = s.id
-        colorPreview.layoutAlign = 'STRETCH'
-        valueColumn.appendChild(colorPreview)
-
-        // Get the paint to show additional details
-        const paints = s.paints || []
-        if (paints.length > 0) {
-          const paint: any = paints[0]
-          if (paint.type === 'SOLID' && paint.color) {
-            // Show hex value
-            const hex = figmaRGBToHex(paint.color as any)
-            const hexTxt = makeText(hex, FONT_REGULAR, FONT_SIZE)
-            hexTxt.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [DARK]
-            valueColumn.appendChild(hexTxt)
-          } else if (paint.type && paint.type.includes('GRADIENT') && paint.gradientStops) {
-            // Show gradient details
-            const gtype = paint.type.replace(/^GRADIENT_?/i, '')
-            const gradientType = gtype.charAt(0).toUpperCase() + gtype.slice(1).toLowerCase()
-            
-            // Header: gradient type + first position
-            const firstPos = Math.round((paint.gradientStops[0]?.position || 0) * 100) + '%'
-            const gradientHeader = makeText(gradientType + ' — ' + firstPos, FONT_REGULAR, FONT_SIZE)
-            gradientHeader.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [DARK]
-            valueColumn.appendChild(gradientHeader)
-
-            // Render each stop with swatch + variable name (or hex)
-            for (const stop of paint.gradientStops) {
-              const stopRow: FrameNode = createAutolayout('gradient-stop', 'HORIZONTAL', GAP_SWATCH_ITEMS)
-              valueColumn.appendChild(stopRow)
-
-              // Find variable that matches this stop's color
-              let colorVar: Variable | null = null
-              if (m.collectionId) {
-                colorVar = resolveColorVariableForMode(stop.color, m.collectionId, m.modeId)
-              }
-              
-              // Create swatch
-              const swatchPreview = figma.createRectangle()
-              swatchPreview.resize(SWATCH_SIZE, SWATCH_SIZE)
-              swatchPreview.cornerRadius = BORDER_RADIUS_SM
-              
-              if (colorVar && m.collectionId) {
-                // Bind to variable
-                swatchPreview.setExplicitVariableModeForCollection(m.collectionId, m.modeId)
-                const swatchFills = JSON.parse(JSON.stringify(swatchPreview.fills))
-                try { swatchFills[0] = figma.variables.setBoundVariableForPaint(swatchFills[0], 'color', colorVar) } catch (e) { }
-                swatchPreview.fills = swatchFills
-              } else {
-                // No variable found, use static color
-                const col: RGB = { r: stop.color.r || 0, g: stop.color.g || 0, b: stop.color.b || 0 }
-                const alpha = (stop.color.a !== undefined) ? stop.color.a : 1
-                swatchPreview.fills = [{ type: 'SOLID', color: col, opacity: alpha } as Paint]
-              }
-              stopRow.appendChild(swatchPreview)
-
-              // Label - use variable name if found
-              const label = colorVar ? sanitizeName(colorVar.name) : resolveColorLabel(stop.color)
-              const labelTxt = makeText(label, FONT_REGULAR, FONT_SIZE)
-              labelTxt.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [DARK]
-              stopRow.appendChild(labelTxt)
-
-              // Show hex alongside variable name
-              if (colorVar) {
-                const hex = figmaRGBToHex(stop.color)
-                const hexTxt = makeText(hex, FONT_REGULAR, FONT_SIZE)
-                hexTxt.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [COLOR_TEXT_SECONDARY]
-                stopRow.appendChild(hexTxt)
-              }
-            }
-
-            // Last position on its own line
-            const lastPos = Math.round((paint.gradientStops[paint.gradientStops.length - 1]?.position || 1) * 100) + '%'
-            const gradientFooter = makeText(lastPos, FONT_REGULAR, FONT_SIZE)
-            gradientFooter.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [DARK]
-            valueColumn.appendChild(gradientFooter)
-          }
-        }
-      }
-    }
+    } catch (e) {}
+    return 0
   }
 
-  // Effect styles
-  const effectStyles = figma.getLocalEffectStyles().filter(s => activeEffectStyleIds.indexOf(s.id) !== -1).sort((a, b) => naturalSort(a.name, b.name))
-  if (effectStyles.length) {
-    const collectionBox: FrameNode = createAutolayout('Effects', 'VERTICAL', GAP_BETWEEN_SECTIONS, 0, 0)
-    collectionBox.fills = [LIGHT]
-    collectionBox.layoutSizingVertical = 'HUG'
-    collectionBox.layoutSizingHorizontal = 'HUG'
-    collectionBox.minWidth = MAX_COLUMN_WIDTH
-    stylesFrame.appendChild(collectionBox)
-
-    // Header row: "Effects" title on left, mode names on right
-    const headerRow: FrameNode = createAutolayout('effect-styles-header', 'HORIZONTAL', GAP_BETWEEN_ROWS, 0, 0, 'HUG')
-    collectionBox.appendChild(headerRow)
-    headerRow.layoutSizingHorizontal = 'HUG'
-    headerRow.minWidth = MAX_COLUMN_WIDTH
-    headerRow.strokes = [{ type: 'SOLID', color: hexToRGB('#cccccc') }]
-    headerRow.strokeWeight = 1
-    headerRow.dashPattern = [4, 4]
-    headerRow.strokeBottomWeight = 1
-    headerRow.strokeTopWeight = 0
-    headerRow.strokeLeftWeight = 0
-    headerRow.strokeRightWeight = 0
-
-    // Left header cell
-    const leftHeader: FrameNode = createAutolayout('left-header', 'VERTICAL', 4, ROW_PADDING, ROW_PADDING)
-    headerRow.appendChild(leftHeader)
-    leftHeader.layoutSizingHorizontal = 'FIXED'
-    leftHeader.resizeWithoutConstraints(LEFT_COLUMN_WIDTH, leftHeader.height)
-    const cHeader = makeText('Effects', FONT_SEMIBOLD, L_FONT_SIZE)
-    addToColumn(leftHeader, cHeader)
-
-    // Mode headers (fixed-width columns)
-    for (const m of modes) {
-      const headerCell: FrameNode = createAutolayout('mode-header-' + m.modeId, 'VERTICAL', 0, ROW_PADDING, ROW_PADDING)
-      headerRow.appendChild(headerCell)
-      headerCell.layoutSizingHorizontal = 'HUG'
-      headerCell.layoutSizingVertical = 'FILL'
-      headerCell.minWidth = MIN_MODE_COLUMN_WIDTH
-      if (modes.length > 2) headerCell.maxWidth = 500
-      headerCell.primaryAxisAlignItems = 'CENTER'
-      headerCell.counterAxisAlignItems = 'CENTER'
-      
-      if (m.name.toLowerCase() === 'dark') {
-        headerCell.fills = [COLOR_DARK_MODE_BG]
-        headerCell.topLeftRadius = 16
-        headerCell.topRightRadius = 16
-      }
-      
-      const valueHeader = makeText((m.name === DEFAULT_MODE_NAME && modes.length === 1) ? 'Value' : m.name, FONT_SEMIBOLD, FONT_SIZE)
-      valueHeader.fills = m.name.toLowerCase() === 'dark' ? [COLOR_DARK_MODE_TEXT] : [{ type: 'SOLID', color: hexToRGB('#000000') }]
-      addToColumn(headerCell, valueHeader)
-      valueHeader.textAlignVertical = 'CENTER'
-    }
-
-    // Rows: one per effect style
-    for (const s of effectStyles) {
-      if (onProgress) onProgress('Effect style: ' + s.name)
-      const row: FrameNode = createAutolayout('row-' + s.name, 'HORIZONTAL', GAP_BETWEEN_ROWS, 0, 0, 'HUG')
-      collectionBox.appendChild(row)
-      row.layoutSizingHorizontal = 'HUG'
-      row.minWidth = MAX_COLUMN_WIDTH
-      
-      // Add border to all except last
-      const isLast = effectStyles.indexOf(s) === effectStyles.length - 1
-      if (!isLast) {
-        row.strokes = [{ type: 'SOLID', color: hexToRGB('#cccccc') }]
-        row.strokeWeight = 1
-        row.dashPattern = [4, 4]
-        row.strokeBottomWeight = 1
-        row.strokeTopWeight = 0
-        row.strokeLeftWeight = 0
-        row.strokeRightWeight = 0
-      }
-
-      // Left cell: name + description (vertical)
-      const leftCell: FrameNode = createAutolayout('left-' + s.name, 'VERTICAL', 4)
-      row.appendChild(leftCell)
-      leftCell.layoutSizingHorizontal = 'FIXED'
-      leftCell.resizeWithoutConstraints(LEFT_COLUMN_WIDTH, leftCell.height)
-      leftCell.paddingTop = ROW_PADDING
-      leftCell.paddingBottom = ROW_PADDING
-      leftCell.paddingLeft = ROW_PADDING
-      leftCell.paddingRight = ROW_PADDING
-
-      const sName = makeText(sanitizeName(s.name), FONT_SEMIBOLD, FONT_SIZE)
-      addToColumn(leftCell, sName)
-      const sDesc = makeText(s.description || 'no description', FONT_REGULAR, 14)
-      sDesc.fills = [COLOR_TEXT_SECONDARY]
-      addToColumn(leftCell, sDesc)
-
-      // Right cells: one per mode
-      for (const m of modes) {
-        const isDark = m.name.toLowerCase() === 'dark'
-        const isLastRow = effectStyles.indexOf(s) === effectStyles.length - 1
-        const valueColumn: FrameNode = createAutolayout('value-' + s.name + '-' + m.modeId, 'VERTICAL', isDark ? 8 : 8)
-        row.appendChild(valueColumn)
-        valueColumn.layoutSizingHorizontal = 'HUG'
-        valueColumn.layoutSizingVertical = 'FILL'
-        valueColumn.minWidth = MIN_MODE_COLUMN_WIDTH
-        if (modes.length > 2) valueColumn.maxWidth = 500
-        
-        if (m.collectionId) {
-          valueColumn.setExplicitVariableModeForCollection(m.collectionId, m.modeId)
-        }
-        
-        // Add mode-appropriate background
-        if (isDark) {
-          valueColumn.fills = [COLOR_DARK_MODE_BG]
-          valueColumn.strokes = [COLOR_DARK_MODE_BORDER]
-          valueColumn.strokeWeight = 1
-          valueColumn.paddingTop = ROW_PADDING
-          valueColumn.paddingBottom = ROW_PADDING
-          valueColumn.paddingLeft = ROW_PADDING
-          valueColumn.paddingRight = ROW_PADDING
-          if (isLastRow) {
-            valueColumn.bottomLeftRadius = 16
-            valueColumn.bottomRightRadius = 16
-          }
-        } else {
-          valueColumn.fills = []
-          valueColumn.paddingTop = ROW_PADDING
-          valueColumn.paddingBottom = ROW_PADDING
-          valueColumn.paddingLeft = ROW_PADDING
-          valueColumn.paddingRight = ROW_PADDING
-        }
-
-        // Effect preview
-        const effectPreview = figma.createRectangle()
-        effectPreview.resize(PREVIEW_WIDTH, PREVIEW_HEIGHT)
-        effectPreview.cornerRadius = 6
-        effectPreview.fills = [{ type: 'SOLID', color: hexToRGB('#ffffff') }]
-        if (m.collectionId) {
-          effectPreview.setExplicitVariableModeForCollection(m.collectionId, m.modeId)
-        }
-        // @ts-ignore - effectStyleId is supported on shapes
-        effectPreview.effectStyleId = s.id
-        effectPreview.layoutAlign = 'STRETCH'
-        valueColumn.appendChild(effectPreview)
-
-        // Effect description
-        const effects = s.effects || []
-        if (effects.length > 0) {
-          for (const effect of effects) {
-            let effectText = ''
-            if (effect.type === 'DROP_SHADOW' || effect.type === 'INNER_SHADOW') {
-              const ox = Math.round((effect.offset?.x || 0))
-              const oy = Math.round((effect.offset?.y || 0))
-              const blur = Math.round(effect.radius || 0)
-              const alpha = (effect.color?.a !== undefined) ? effect.color.a : 1
-              effectText = `${effect.type.replace('_', ' ').toLowerCase()}: ${ox}x ${oy}y ${blur}px ${Math.round(alpha * 100)}%`
-            } else if (effect.type === 'LAYER_BLUR' || effect.type === 'BACKGROUND_BLUR') {
-              const blur = Math.round(effect.radius || 0)
-              effectText = `${effect.type.replace('_', ' ').toLowerCase()}: ${blur}px`
-            } else {
-              effectText = effect.type.replace('_', ' ').toLowerCase()
-            }
-            const txt = makeText(effectText, FONT_REGULAR, FONT_SIZE)
-            txt.fills = isDark ? [COLOR_DARK_MODE_TEXT] : [COLOR_TEXT_SECONDARY]
-            valueColumn.appendChild(txt)
-          }
-        }
-      }
-    }
+  function compareTextStylesBySizeDesc(a: TextStyle, b: TextStyle): number {
+    const aSize = resolveTextStyleSizeForSort(a)
+    const bSize = resolveTextStyleSizeForSort(b)
+    if (bSize !== aSize) return bSize - aSize
+    return naturalSort(a.name, b.name)
   }
 
-  // Text styles
-  const textStyles = figma.getLocalTextStyles().filter(s => activeTextStyleIds.indexOf(s.id) !== -1).sort((a, b) => naturalSort(a.name, b.name))
-  if (textStyles.length) {
-    const collectionBox: FrameNode = createAutolayout('Text', 'VERTICAL', GAP_BETWEEN_SECTIONS, 0, 0)
-    collectionBox.fills = [LIGHT]
-    collectionBox.layoutSizingVertical = 'HUG'
-    collectionBox.layoutSizingHorizontal = 'HUG'
-    collectionBox.minWidth = MAX_COLUMN_WIDTH
-    stylesFrame.appendChild(collectionBox)
+  function writeStyleSection<T extends BaseStyle>(
+    sectionTitle: string,
+    styles: T[],
+    previewFactory: (s: T) => SceneNode | null,
+    valueFactory: (s: T) => string,
+    sortWithinGroup?: (a: T, b: T) => number,
+    sortGroups?: (a: { path: string; items: T[] }, b: { path: string; items: T[] }) => number
+  ): void {
+    if (!styles.length) return
+    stylesFrame.appendChild(createTokenGroupTitle(sectionTitle))
+    const grouped = groupByTokenPath(styles, s => s.name)
+    const orderedGroups = sortGroups ? grouped.slice().sort(sortGroups) : grouped
+    for (let gi = 0; gi < orderedGroups.length; gi++) {
+      const group = orderedGroups[gi]
+      const items = sortWithinGroup ? group.items.slice().sort(sortWithinGroup) : group.items
+      const subgroupLabel = getLeafGroupLabel(group.path)
+      const subgroupDisplay = getParentAndLeafGroupLabel(group.path)
+      stylesFrame.appendChild(createTokenSubgroupTitle(subgroupDisplay))
+      const section = createTokenTableSection(sectionTitle + '-' + subgroupLabel)
+      stylesFrame.appendChild(section)
+      section.appendChild(createTokenHeaderRow(subgroupDisplay))
 
-    // header row (collection title on left, preview header on right)
-    const headerRow: FrameNode = createAutolayout('text-styles-header', 'HORIZONTAL', GAP_BETWEEN_ROWS, 0, 0, 'HUG')
-    collectionBox.appendChild(headerRow)
-    headerRow.layoutSizingHorizontal = 'HUG'
-    headerRow.minWidth = MAX_COLUMN_WIDTH
-    headerRow.strokes = [{ type: 'SOLID', color: hexToRGB('#cccccc') }]
-    headerRow.strokeWeight = 1
-    headerRow.dashPattern = [4, 4]
-    headerRow.strokeBottomWeight = 1
-    headerRow.strokeTopWeight = 0
-    headerRow.strokeLeftWeight = 0
-    headerRow.strokeRightWeight = 0
-    const leftHeaderT = createAutolayout('left-header', 'VERTICAL', 4, ROW_PADDING, ROW_PADDING)
-    headerRow.appendChild(leftHeaderT)
-    leftHeaderT.layoutSizingHorizontal = 'FIXED'
-    leftHeaderT.resizeWithoutConstraints(LEFT_COLUMN_WIDTH, leftHeaderT.height)
-    const tHeader = makeText('Text', FONT_SEMIBOLD, L_FONT_SIZE)
-    addToColumn(leftHeaderT, tHeader)
-
-    const headerCellPreviewT: FrameNode = createAutolayout('value-header-cell', 'VERTICAL', 0, ROW_PADDING, ROW_PADDING, 'FILL')
-    headerRow.appendChild(headerCellPreviewT)
-    headerCellPreviewT.layoutSizingHorizontal = 'FILL'
-    const valueHeaderT = makeText('Value', FONT_SEMIBOLD, FONT_SIZE)
-    addToColumn(headerCellPreviewT, valueHeaderT)
-    valueHeaderT.textAlignVertical = 'CENTER'
-
-    for (const s of textStyles) {
-      if (onProgress) onProgress('Text style: ' + s.name)
-      const row: FrameNode = createAutolayout('text-row-' + s.name, 'HORIZONTAL', GAP_BETWEEN_ROWS, ROW_PADDING, ROW_PADDING, 'HUG')
-      collectionBox.appendChild(row)
-      row.layoutSizingHorizontal = 'HUG'
-      row.minWidth = MAX_COLUMN_WIDTH
-
-      // Add border to all except last
-      const isLast = textStyles.indexOf(s) === textStyles.length - 1
-      if (!isLast) {
-        row.strokes = [{ type: 'SOLID', color: hexToRGB('#cccccc') }]
-        row.strokeWeight = 1
-        row.dashPattern = [4, 4]
-        row.strokeBottomWeight = 1
-        row.strokeTopWeight = 0
-        row.strokeLeftWeight = 0
-        row.strokeRightWeight = 0
-      }
-
-      const leftCell = createAutolayout('left-' + s.name, 'VERTICAL', 4)
-      row.appendChild(leftCell)
-      leftCell.layoutSizingHorizontal = 'FIXED'
-      leftCell.resizeWithoutConstraints(LEFT_COLUMN_WIDTH, leftCell.height)
-
-      const sName = makeText(sanitizeName(s.name), FONT_SEMIBOLD, FONT_SIZE)
-      addToColumn(leftCell, sName)
-      const sDesc = makeText((s as any).description || 'no description', FONT_REGULAR, 14)
-      sDesc.fills = [COLOR_TEXT_SECONDARY]
-      addToColumn(leftCell, sDesc)
-
-      const valueCell = createAutolayout('value-' + s.name, 'VERTICAL', 6)
-      row.appendChild(valueCell)
-      valueCell.layoutSizingHorizontal = 'HUG'
-      valueCell.minWidth = MIN_MODE_COLUMN_WIDTH
-
-      // Create a text preview and try to assign the text style
-      const previewText = makeText(sanitizeName(s.name), FONT_REGULAR, FONT_SIZE)
-      try {
-        // @ts-ignore - assign the style id so the preview uses the style
-        previewText.textStyleId = s.id
-      } catch (e) {
-        // Fallback: set fontName/size if available
+      for (let i = 0; i < items.length; i++) {
+        const s = items[i]
+        if (onProgress) onProgress(sectionTitle + ': ' + s.name)
         try {
-          if ((s as any).fontName) previewText.fontName = (s as any).fontName
-          if ((s as any).fontSize) previewText.fontSize = (s as any).fontSize
-        } catch (e) {}
-      }
-      previewText.layoutAlign = 'STRETCH'
-      valueCell.appendChild(previewText)
-
-      // Add property values below preview
-      const ts = s as any
-      
-      // fontFamily
-      if (ts.fontName) {
-        const fontFamily = (typeof ts.fontName === 'object' && ts.fontName.family) ? ts.fontName.family : (typeof ts.fontName === 'string' ? ts.fontName : '')
-        if (fontFamily) {
-          const fontFamilyTxt = makeText('fontFamily: ' + fontFamily, FONT_REGULAR, 18)
-          fontFamilyTxt.fills = [COLOR_TEXT_SECONDARY]
-          fontFamilyTxt.layoutAlign = 'STRETCH'
-          valueCell.appendChild(fontFamilyTxt)
-        }
-        
-        // fontWeight/fontStyle
-        const fontStyle = (typeof ts.fontName === 'object' && ts.fontName.style) ? ts.fontName.style : ''
-        if (fontStyle) {
-          const fontWeightTxt = makeText('fontWeight: ' + fontStyle, FONT_REGULAR, 18)
-          fontWeightTxt.fills = [COLOR_TEXT_SECONDARY]
-          fontWeightTxt.layoutAlign = 'STRETCH'
-          valueCell.appendChild(fontWeightTxt)
-        }
-      }
-      
-      // fontSize
-      if (typeof ts.fontSize !== 'undefined' && ts.fontSize !== null) {
-        const fontSizeTxt = makeText('fontSize: ' + ts.fontSize + 'px', FONT_REGULAR, 18)
-        fontSizeTxt.fills = [COLOR_TEXT_SECONDARY]
-        fontSizeTxt.layoutAlign = 'STRETCH'
-        valueCell.appendChild(fontSizeTxt)
-      }
-      
-      // lineHeight
-      if (typeof ts.lineHeight !== 'undefined' && ts.lineHeight !== null) {
-        const lh = (typeof ts.lineHeight === 'object' && ts.lineHeight.value !== undefined) ? ts.lineHeight.value : ts.lineHeight
-        const unit = (typeof ts.lineHeight === 'object' && ts.lineHeight.unit) ? ts.lineHeight.unit : '%'
-        const displayUnit = unit === 'PERCENT' ? '%' : unit
-        const displayValue = unit === 'PERCENT' ? Math.round(lh * 100) / 100 : lh
-        const lineHeightTxt = makeText('lineHeight: ' + displayValue + displayUnit, FONT_REGULAR, 18)
-        lineHeightTxt.fills = [COLOR_TEXT_SECONDARY]
-        lineHeightTxt.layoutAlign = 'STRETCH'
-        valueCell.appendChild(lineHeightTxt)
-      }
-      
-      // letterSpacing
-      if (typeof ts.letterSpacing !== 'undefined' && ts.letterSpacing !== null) {
-        const ls = (typeof ts.letterSpacing === 'object' && ts.letterSpacing.value !== undefined) ? ts.letterSpacing.value : ts.letterSpacing
-        const unit = (typeof ts.letterSpacing === 'object' && ts.letterSpacing.unit) ? ts.letterSpacing.unit : 'px'
-        const displayUnit = unit === 'PERCENT' ? '%' : unit
-        const displayValue = unit === 'PERCENT' ? Math.round(ls * 100) / 100 : ls
-        const letterSpacingTxt = makeText('letterSpacing: ' + displayValue + displayUnit, FONT_REGULAR, 18)
-        letterSpacingTxt.fills = [COLOR_TEXT_SECONDARY]
-        letterSpacingTxt.layoutAlign = 'STRETCH'
-        valueCell.appendChild(letterSpacingTxt)
-      }
-      
-      // paragraphSpacing
-      if (typeof ts.paragraphSpacing !== 'undefined' && ts.paragraphSpacing !== null) {
-        const unit = (ts as any).paragraphSpacingUnit || 'px'
-        const paragraphSpacingTxt = makeText('paragraphSpacing: ' + ts.paragraphSpacing + unit, FONT_REGULAR, 18)
-        paragraphSpacingTxt.fills = [COLOR_TEXT_SECONDARY]
-        paragraphSpacingTxt.layoutAlign = 'STRETCH'
-        valueCell.appendChild(paragraphSpacingTxt)
-      }
-
-    }
-  }
-
-  const layoutStyles = figma.getLocalGridStyles().filter(s => activeLayoutStyleIds.indexOf(s.id) !== -1).sort((a, b) => naturalSort(a.name, b.name))
-  // Cleanup any stray top-level grid preview frames created previously
-  try {
-    for (const child of figma.currentPage.children.slice()) {
-      if (child.name && child.name.startsWith && child.name.startsWith('grid-')) {
-        if (child.parent === figma.currentPage) child.remove()
-      }
-    }
-  } catch (e) {
-    // ignore
-  }
-  if (layoutStyles.length) {
-    const collectionBox: FrameNode = createAutolayout('Layout', 'VERTICAL', GAP_BETWEEN_SECTIONS, 0, 0)
-    collectionBox.fills = [LIGHT]
-    collectionBox.layoutSizingVertical = 'HUG'
-    collectionBox.layoutSizingHorizontal = 'HUG'
-    collectionBox.minWidth = MAX_COLUMN_WIDTH
-    stylesFrame.appendChild(collectionBox)
-
-    // header row (collection title on left, preview header on right)
-    const headerRow: FrameNode = createAutolayout('layout-styles-header', 'HORIZONTAL', GAP_BETWEEN_ROWS, 0, 0, 'HUG')
-    collectionBox.appendChild(headerRow)
-    headerRow.layoutSizingHorizontal = 'HUG'
-    headerRow.minWidth = MAX_COLUMN_WIDTH
-    headerRow.strokes = [{ type: 'SOLID', color: hexToRGB('#cccccc') }]
-    headerRow.strokeWeight = 1
-    headerRow.dashPattern = [4, 4]
-    headerRow.strokeBottomWeight = 1
-    headerRow.strokeTopWeight = 0
-    headerRow.strokeLeftWeight = 0
-    headerRow.strokeRightWeight = 0
-    const leftHeaderL = createAutolayout('left-header', 'VERTICAL', 4, ROW_PADDING, ROW_PADDING)
-    headerRow.appendChild(leftHeaderL)
-    leftHeaderL.layoutSizingHorizontal = 'FIXED'
-    leftHeaderL.resizeWithoutConstraints(LEFT_COLUMN_WIDTH, leftHeaderL.height)
-    const lHeader = makeText('Layout', FONT_SEMIBOLD, L_FONT_SIZE)
-    addToColumn(leftHeaderL, lHeader)
-
-    const headerCellPreviewL: FrameNode = createAutolayout('value-header-cell', 'VERTICAL', 0, ROW_PADDING, ROW_PADDING, 'FILL')
-    headerRow.appendChild(headerCellPreviewL)
-    headerCellPreviewL.layoutSizingHorizontal = 'FILL'
-    const valueHeaderL = makeText('Value', FONT_SEMIBOLD, FONT_SIZE)
-    addToColumn(headerCellPreviewL, valueHeaderL)
-    valueHeaderL.textAlignVertical = 'CENTER'
-
-    for (const s of layoutStyles) {
-      if (onProgress) onProgress('Layout style: ' + s.name)
-      const row: FrameNode = createAutolayout('layout-row-' + s.name, 'HORIZONTAL', GAP_BETWEEN_ROWS, ROW_PADDING, ROW_PADDING, 'HUG')
-      collectionBox.appendChild(row)
-      row.layoutSizingHorizontal = 'HUG'
-      row.minWidth = MAX_COLUMN_WIDTH
-      
-      // Add border to all except last
-      const isLast = layoutStyles.indexOf(s) === layoutStyles.length - 1
-      if (!isLast) {
-        row.strokes = [{ type: 'SOLID', color: hexToRGB('#cccccc') }]
-        row.strokeWeight = 1
-        row.dashPattern = [4, 4]
-        row.strokeBottomWeight = 1
-        row.strokeTopWeight = 0
-        row.strokeLeftWeight = 0
-        row.strokeRightWeight = 0
-      }
-
-      const leftCell = createAutolayout('left-' + s.name, 'VERTICAL', 4)
-      row.appendChild(leftCell)
-      leftCell.layoutSizingHorizontal = 'FIXED'
-      leftCell.resizeWithoutConstraints(LEFT_COLUMN_WIDTH, leftCell.height)
-
-      const sName = makeText(sanitizeName(s.name), FONT_SEMIBOLD, FONT_SIZE)
-      addToColumn(leftCell, sName)
-      const sDesc = makeText(s.description || 'no description', FONT_REGULAR, 14)
-      sDesc.fills = [COLOR_TEXT_SECONDARY]
-      addToColumn(leftCell, sDesc)
-
-      const valueCell = createAutolayout('value-' + s.name, 'VERTICAL', 6)
-      row.appendChild(valueCell)
-      valueCell.layoutSizingHorizontal = 'FILL'
-
-      const grids = (s as any).layoutGrids || []
-      if (grids.length === 0) {
-        const info = makeText('No grids defined', FONT_REGULAR, FONT_SIZE)
-        valueCell.appendChild(info)
-      } else {
-        for (const g of grids) {
-          const pattern = (g.pattern || 'COLUMNS')
-          const patternLabel = pattern === 'COLUMNS' ? 'Columns' : (pattern === 'ROWS' ? 'Rows' : 'Grid')
-
-          const gridBox: FrameNode = createAutolayout('grid-' + patternLabel, 'VERTICAL', 6, 6, 6, 'FILL')
-          gridBox.fills = []
-          gridBox.resizeWithoutConstraints(260, 80)
-
-          // header: pattern name
-          const header = makeText(patternLabel, FONT_SEMIBOLD, FONT_SIZE)
-          addToColumn(gridBox, header)
-
-          // Create a small info row
-          const infoRow: FrameNode = createAutolayout('grid-info', 'HORIZONTAL', GAP_SWATCH_ITEMS)
-
-          // Count
-          const countTxt = makeText('Count: ' + (g.count !== undefined ? String(g.count) : '-'), FONT_REGULAR, FONT_SIZE)
-          addToColumn(infoRow, countTxt)
-
-          // Gutter
-          const gutterTxt = makeText('Gutter: ' + (g.gutterSize !== undefined ? String(g.gutterSize) : '-'), FONT_REGULAR, FONT_SIZE)
-          addToColumn(infoRow, gutterTxt)
-
-          // Offset / Margin
-          const offsetTxt = makeText('Margin: ' + (g.offset !== undefined ? String(g.offset) : '-'), FONT_REGULAR, FONT_SIZE)
-          addToColumn(infoRow, offsetTxt)
-
-          // Section size / Width
-          const sizeUnit = (g as any).sectionSizeUnit || (g.sectionSize ? 'px' : '')
-          const widthTxt = makeText('Width: ' + (g.sectionSize !== undefined ? String(g.sectionSize) + sizeUnit : 'Auto'), FONT_REGULAR, FONT_SIZE)
-          addToColumn(infoRow, widthTxt)
-
-          gridBox.appendChild(infoRow)
-
-          // Type / alignment
-          const typeTxt = makeText('Type: ' + (g.alignment || (g.sectionSize ? 'Fixed' : 'Stretch')), FONT_REGULAR, FONT_SIZE)
-          addToColumn(gridBox, typeTxt)
-
-          // Color swatch if present
-          if (g.color) {
-            const swatchRow: FrameNode = createAutolayout('swatch-row', 'HORIZONTAL', GAP_SWATCH_ITEMS)
-            const gridColorPreview = figma.createRectangle()
-            gridColorPreview.resize(PREVIEW_WIDTH, PREVIEW_HEIGHT)
-            const colorObj = g.color
-            // @ts-ignore
-            const col: RGB = { r: colorObj.r || 0, g: colorObj.g || 0, b: colorObj.b || 0 }
-            // @ts-ignore
-            const alpha = (colorObj.a !== undefined) ? colorObj.a : 1
-            gridColorPreview.fills = [{ type: 'SOLID', color: col, opacity: alpha } as Paint]
-            addToColumn(swatchRow, gridColorPreview)
-
-            const hex = figmaRGBToHex(colorObj as any)
-            const hexTxt = makeText(hex + (alpha !== 1 ? (' ' + Math.round(alpha * 100) + '%') : ''), FONT_REGULAR, FONT_SIZE)
-            addToColumn(swatchRow, hexTxt)
-            gridBox.appendChild(swatchRow)
-          }
-
-          // Preview bar: visualize columns/gutters/offset
-          const previewHeight = 50
-          const previewWidth = Math.min(MAX_COLUMN_WIDTH / 2, 720)
-          const preview = createAutolayout('grid-preview', 'HORIZONTAL', g.gutterSize || 8, Math.max(0, g.offset || 0), 0)
-          gridBox.appendChild(preview)
-          preview.resizeWithoutConstraints(previewWidth, previewHeight)
-
-          const previewCount = Math.min((g.count || 1), 8)
-          for (let i = 0; i < previewCount; i++) {
-            const columnPreview = figma.createRectangle()
-            if (g.sectionSize && g.sectionSize > 0) {
-              columnPreview.resizeWithoutConstraints(Math.max(8, g.sectionSize), previewHeight)
-            } else {
-              columnPreview.resizeWithoutConstraints(20, previewHeight)
-              // @ts-ignore
-              columnPreview.layoutGrow = 1
-            }
-            if (g.color) {
-              const colorObj = g.color
-              // @ts-ignore
-              const col: RGB = { r: colorObj.r || 0, g: colorObj.g || 0, b: colorObj.b || 0 }
-              // @ts-ignore
-              const alpha = (colorObj.a !== undefined) ? colorObj.a : 1
-              columnPreview.fills = [{ type: 'SOLID', color: col, opacity: alpha } as Paint]
-            } else {
-              columnPreview.fills = [COLOR_BG_LIGHT]
-            }
-            preview.appendChild(columnPreview)
-          }
-
-          if ((g.count || 0) > previewCount) {
-            const more = makeText('… (' + (g.count || 0) + ' total)', FONT_REGULAR, FONT_SIZE)
-            addToColumn(gridBox, more)
-          }
-
-          addToColumn(valueCell, gridBox)
-          gridBox.layoutSizingHorizontal = 'FILL'
-          preview.layoutSizingHorizontal = 'FILL'
+          appendTokenRow(
+            section,
+            sectionTitle + '-row-' + s.id,
+            previewFactory(s),
+            sanitizeName(getLeafTokenName(s.name)),
+            valueFactory(s),
+            s.description || 'no description',
+            i === items.length - 1
+          )
+          count++
+        } catch (e) {
+          skippedStyleRows.push(sectionTitle + '/' + s.name)
+          const details = (e && (e as Error).message) ? (e as Error).message : String(e)
+          figma.ui.postMessage({ type: 'tokens-status', text: 'Skipped style due to render error: ' + s.name + ' (' + details + ')' })
+          console.error('Token row render failed for style', sectionTitle, s.name, e)
         }
       }
     }
   }
+
+  const paintStyles = figma.getLocalPaintStyles()
+    .filter(s => activeColorStyleIds.indexOf(s.id) !== -1)
+    .sort((a, b) => naturalSort(a.name, b.name))
+  writeStyleSection<PaintStyle>('Color', paintStyles, s => makeStylePreview(s.id, 'paint'), summarizePaintStyleValue)
+
+  const effectStyles = figma.getLocalEffectStyles()
+    .filter(s => activeEffectStyleIds.indexOf(s.id) !== -1)
+    .sort((a, b) => naturalSort(a.name, b.name))
+  writeStyleSection<EffectStyle>('Effects', effectStyles, s => makeStylePreview(s.id, 'effect'), summarizeEffectStyleValue)
+
+  const textStyles = figma.getLocalTextStyles()
+    .filter(s => activeTextStyleIds.indexOf(s.id) !== -1)
+    .sort((a, b) => compareTextStylesBySizeDesc(a, b))
+  writeStyleSection<TextStyle>(
+    'Text',
+    textStyles,
+    s => makeStylePreview(s.id, 'text'),
+    summarizeTextStyleValue,
+    compareTextStylesBySizeDesc,
+    (a, b) => {
+      const maxA = a.items.reduce((m, s) => Math.max(m, resolveTextStyleSizeForSort(s)), 0)
+      const maxB = b.items.reduce((m, s) => Math.max(m, resolveTextStyleSizeForSort(s)), 0)
+      if (maxB !== maxA) return maxB - maxA
+      return naturalSort(a.path, b.path)
+    }
+  )
+
+  const layoutStyles = figma.getLocalGridStyles()
+    .filter(s => activeLayoutStyleIds.indexOf(s.id) !== -1)
+    .sort((a, b) => naturalSort(a.name, b.name))
+  writeStyleSection<GridStyle>('Layout', layoutStyles, s => makeStylePreview(s.id, 'layout'), summarizeLayoutStyleValue)
 }
 
 function offset(node: SceneNode, x: number, y: number, absolute: boolean = false) {
@@ -1638,7 +2120,7 @@ function createAutolayout(
   autolayout.paddingTop = paddingY
   autolayout.paddingBottom = paddingY
   if (sizingX !== 'FILL') autolayout.layoutSizingHorizontal = sizingX
-  autolayout.layoutSizingVertical = sizingY
+  if (sizingY !== 'FILL') autolayout.layoutSizingVertical = sizingY
   return autolayout
 
 }
@@ -1659,11 +2141,18 @@ function finish(message: string = undefined) {
       " " + ACTION_MSGS[Math.floor(Math.random() * ACTION_MSGS.length)] +
       " " + ((count === 1) ? "only one variable" : (count + " variables"))
   }
-  else text = IDLE_MSGS[Math.floor(Math.random() * IDLE_MSGS.length)]
+  else if (skippedVariableRows.length || skippedStyleRows.length) {
+    var skippedVarSample = skippedVariableRows.slice(0, 3)
+    var skippedStyleSample = skippedStyleRows.slice(0, 3)
+    var skippedDetails = [] as string[]
+    if (skippedVarSample.length) skippedDetails.push('variables: ' + skippedVarSample.join(', '))
+    if (skippedStyleSample.length) skippedDetails.push('styles: ' + skippedStyleSample.join(', '))
+    text = 'No rows rendered. Skipped ' + (skippedVariableRows.length + skippedStyleRows.length) + ' items (' + skippedDetails.join(' | ') + ')'
+  } else text = IDLE_MSGS[Math.floor(Math.random() * IDLE_MSGS.length)]
   notify(text)
   try {
     figma.ui.postMessage({ type: 'tokens-status', text: text })
-    figma.ui.postMessage({ type: 'tokens-resync-state', available: !!findTokensDocFrame() })
+    figma.ui.postMessage({ type: 'tokens-resync-state', available: !!getSelectedTokensDocFrame() })
   } catch (e) {
     // UI may not be open (headless relaunch flows) — notify() already covered it
   }
